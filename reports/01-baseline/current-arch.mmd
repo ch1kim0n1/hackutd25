@@ -1,0 +1,126 @@
+graph TB
+    subgraph "User Interface"
+        Web[Web Browser<br/>localhost:5173]
+        Electron[Electron App<br/>Desktop Wrapper]
+    end
+
+    subgraph "Frontend Layer (React/TypeScript)"
+        React[React 18 + Vite<br/>31 Components]
+        APIClient[API Client<br/>REST + WebSocket]
+        State[State Management<br/>React Hooks]
+
+        React --> APIClient
+        React --> State
+    end
+
+    subgraph "API Gateway (FastAPI)"
+        FastAPI[FastAPI Server<br/>server.py ⚠️ 2,554 LOC]
+        CORS[CORS Middleware]
+        AuthMiddleware[Auth Middleware]
+        WebSocket[WebSocket Support<br/>/ws/warroom]
+
+        FastAPI --> CORS
+        FastAPI --> AuthMiddleware
+        FastAPI --> WebSocket
+    end
+
+    subgraph "Business Logic Layer"
+        Orchestrator[Orchestrator<br/>Agent Coordination<br/>orchestrator.py]
+        AgentNetwork[Agent Network<br/>Redis PubSub<br/>core/agent_network.py]
+
+        Orchestrator --> AgentNetwork
+    end
+
+    subgraph "Agent System (APEX Core)"
+        MarketAgent[Market Agent<br/>News + Analysis<br/>agents/market_agent.py]
+        StrategyAgent[Strategy Agent<br/>Portfolio Opt<br/>agents/strategy_agent.py]
+        RiskAgent[Risk Agent<br/>Monte Carlo<br/>agents/risk_agent.py]
+        ExecutorAgent[Executor Agent<br/>Trade Exec<br/>agents/executor_agent.py]
+        ExplainerAgent[Explainer Agent<br/>Education<br/>agents/explainer_agent.py]
+
+        AgentNetwork --> MarketAgent
+        AgentNetwork --> StrategyAgent
+        AgentNetwork --> RiskAgent
+        AgentNetwork --> ExecutorAgent
+        AgentNetwork --> ExplainerAgent
+    end
+
+    subgraph "Service Layer"
+        VoiceService[Voice Service<br/>STT/TTS + Commands<br/>services/voice.py]
+        SecurityService[Security Service<br/>Auth + Encryption<br/>services/security.py]
+        RAGService[RAG Service<br/>Vector Search<br/>services/rag/chroma_service.py]
+        FinanceAdapter[Finance Adapter<br/>Plaid/Mock<br/>services/finance_adapter.py]
+    end
+
+    subgraph "External APIs"
+        OpenRouter[OpenRouter API<br/>NVIDIA Llama Models]
+        Alpaca[Alpaca API<br/>Trading Platform]
+        Plaid[Plaid API<br/>Financial Data]
+        NewsAPI[News RSS Feeds<br/>Yahoo, CNBC, WSJ]
+    end
+
+    subgraph "Data Layer"
+        PostgreSQL[(PostgreSQL<br/>Primary Database)]
+        Redis[(Redis<br/>Cache + PubSub)]
+        ChromaDB[(ChromaDB<br/>Vector Database)]
+    end
+
+    subgraph "Infrastructure"
+        Alembic[Database Migrations<br/>alembic/]
+        Logging[Structured Logging<br/>services/logging_service.py]
+        BackgroundJobs[Background Tasks<br/>asyncio]
+    end
+
+    %% Connections
+    Web --> React
+    Electron --> React
+
+    React --> FastAPI
+    APIClient --> FastAPI
+
+    FastAPI --> Orchestrator
+    FastAPI --> VoiceService
+    FastAPI --> SecurityService
+    FastAPI --> RAGService
+    FastAPI --> FinanceAdapter
+
+    Orchestrator --> AgentNetwork
+
+    MarketAgent --> OpenRouter
+    StrategyAgent --> OpenRouter
+    RiskAgent --> OpenRouter
+    ExplainerAgent --> OpenRouter
+
+    MarketAgent --> NewsAPI
+
+    ExecutorAgent --> Alpaca
+
+    FinanceAdapter --> Plaid
+
+    VoiceService --> OpenRouter
+
+    FastAPI --> PostgreSQL
+    FastAPI --> Redis
+    AgentNetwork --> Redis
+    RAGService --> ChromaDB
+
+    Alembic --> PostgreSQL
+
+    %% Styling
+    classDef ui fill:#0984e3,stroke:#0984e3,color:#fff
+    classDef api fill:#00b894,stroke:#00b894,color:#fff
+    classDef business fill:#fdcb6e,stroke:#fdcb6e,color:#000
+    classDef agents fill:#e17055,stroke:#e17055,color:#fff
+    classDef services fill:#6c5ce7,stroke:#6c5ce7,color:#fff
+    classDef external fill:#a29bfe,stroke:#a29bfe,color:#fff
+    classDef data fill:#fd79a8,stroke:#fd79a8,color:#fff
+    classDef infra fill:#636e72,stroke:#636e72,color:#fff
+
+    class Web,Electron,React ui
+    class FastAPI,CORS,AuthMiddleware,WebSocket api
+    class Orchestrator,AgentNetwork business
+    class MarketAgent,StrategyAgent,RiskAgent,ExecutorAgent,ExplainerAgent agents
+    class VoiceService,SecurityService,RAGService,FinanceAdapter services
+    class OpenRouter,Alpaca,Plaid,NewsAPI external
+    class PostgreSQL,Redis,ChromaDB data
+    class Alembic,Logging,BackgroundJobs infra

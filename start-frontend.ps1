@@ -4,12 +4,12 @@
 Write-Host "`n🚀 Starting APEX Frontend..." -ForegroundColor Cyan
 Write-Host "="*70 -ForegroundColor Cyan
 
-Set-Location frontend
+Set-Location "client\front"
 
 Write-Host "`n📍 Frontend will be available at:" -ForegroundColor Yellow
-Write-Host "   http://localhost:3000" -ForegroundColor White
+Write-Host "   http://localhost:5173" -ForegroundColor White
 
-Write-Host "`n⚡ Starting React dev server..." -ForegroundColor Yellow
+Write-Host "`n⚡ Starting Vite dev server..." -ForegroundColor Yellow
 Write-Host ""
 
-npm start
+npm run dev

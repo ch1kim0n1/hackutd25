@@ -2,6 +2,16 @@
  * Base Alpaca Client
  * Core client for making authenticated requests to Alpaca API
  * Uses fetch API for browser compatibility (no Node.js dependencies)
+ *
+ * ⚠️ SECURITY WARNING - PLANNED FOR REFACTOR:
+ * This client makes direct API calls from the browser to Alpaca, which exposes
+ * API credentials in the frontend bundle. This is acceptable for demo/development
+ * but MUST be replaced with backend proxy endpoints for production.
+ *
+ * REFACTOR PLAN (Phase 3.2):
+ * - All Alpaca calls should route through backend API at /api/v1/alpaca/*
+ * - Frontend will use typed API client instead of this direct client
+ * - API keys will be stored server-side only
  */
 
 import { getAlpacaConfig, type AlpacaConfig } from './alpaca.config';

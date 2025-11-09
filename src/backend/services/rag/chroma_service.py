@@ -486,5 +486,195 @@ class ChromaService:
         self.client.persist()
 
 
-# Global instance
+# RAG Query Engine Classes (consolidated from query_engine.py)
+class QueryIntent(str, Enum):
+    """Types of queries users can make"""
+    PRICE_MOVEMENT = "price_movement"  # "Why did AAPL drop yesterday?"
+    MARKET_EVENT = "market_event"  # "Tell me about the 2008 crash"
+    COMPANY_INFO = "company_info"  # "What does Tesla do?"
+    NEWS_SEARCH = "news_search"  # "Recent news about tech stocks"
+    GENERAL = "general"  # General query
+
+
+class RAGQueryEngine:
+    """
+    Query engine that combines semantic search with context-aware responses.
+    """
+
+    def __init__(self):
+        self.chroma = chroma_service
+
+    def classify_intent(self, query: str) -> QueryIntent:
+        """
+        Classify the intent of a user query.
+
+        Args:
+            query: Natural language query
+
+        Returns:
+            QueryIntent enum
+        """
+        query_lower = query.lower()
+
+        # Price movement patterns
+        price_keywords = ["why did", "why is", "what happened to", "price", "drop", "rise", "fall", "surge"]
+        if any(keyword in query_lower for keyword in price_keywords):
+            # Check if there's a stock symbol (uppercase letters)
+            if any(word.isupper() for word in query.split()):
+                return QueryIntent.PRICE_MOVEMENT
+
+        # Market event patterns
+        event_keywords = ["crash", "bubble", "recession", "crisis", "bull market", "bear market", "2008", "2020"]
+        if any(keyword in query_lower for keyword in event_keywords):
+            return QueryIntent.MARKET_EVENT
+
+        # Company info patterns
+        company_keywords = ["what does", "tell me about", "company", "business", "sector"]
+        if any(keyword in query_lower for keyword in company_keywords):
+            return QueryIntent.COMPANY_INFO
+
+        # News search patterns
+        news_keywords = ["news", "recent", "latest", "today", "this week"]
+        if any(keyword in query_lower for keyword in news_keywords):
+            return QueryIntent.NEWS_SEARCH
+
+        return QueryIntent.GENERAL
+
+    def extract_symbol(self, query: str) -> Optional[str]:
+        """
+        Extract stock symbol from query.
+
+        Args:
+            query: Natural language query
+
+        Returns:
+            Stock symbol in uppercase, or None
+        """
+        import re
+
+        # Look for uppercase words that look like stock symbols
+        words = query.split()
+        for word in words:
+            word = word.strip('.,!?')
+            if len(word) >= 1 and len(word) <= 5 and word.isupper() and word.isalpha():
+                # Common stock symbols
+                return word
+
+        return None
+
+    def extract_date(self, query: str) -> Optional[str]:
+        """
+        Extract date references from query.
+
+        Args:
+            query: Natural language query
+
+        Returns:
+            ISO date string or None
+        """
+        import re
+        from datetime import datetime, timedelta
+
+        query_lower = query.lower()
+
+        # Yesterday
+        if 'yesterday' in query_lower:
+            yesterday = datetime.now() - timedelta(days=1)
+            return yesterday.strftime('%Y-%m-%d')
+
+        # Today
+        if 'today' in query_lower:
+            return datetime.now().strftime('%Y-%m-%d')
+
+        # Specific year
+        year_match = re.search(r'\b(20\d{2})\b', query)
+        if year_match:
+            return f"{year_match.group(1)}-12-31"  # End of year
+
+        return None
+
+    def search(self, query: str, limit: int = 5, include_sources: bool = True) -> Dict[str, Any]:
+        """
+        Main search method that classifies intent and performs semantic search.
+
+        Args:
+            query: Natural language query
+            limit: Maximum results to return
+            include_sources: Whether to include source metadata
+
+        Returns:
+            Search results with intent classification
+        """
+        from datetime import datetime
+
+        # Classify intent
+        intent = self.classify_intent(query)
+
+        # Extract entities
+        symbol = self.extract_symbol(query)
+        date_str = self.extract_date(query)
+
+        # Search based on intent
+        results = []
+
+        if intent.value == "price_movement" and symbol:
+            # Search price movement collection
+            query_results = self.chroma.collections["price_movements"].query(
+                query_texts=[query],
+                n_results=limit
+            )
+            results = query_results["documents"][0] if query_results["documents"] else []
+
+        elif intent.value == "market_event":
+            # Search market events
+            query_results = self.chroma.collections["market_events"].query(
+                query_texts=[query],
+                n_results=limit
+            )
+            results = query_results["documents"][0] if query_results["documents"] else []
+
+        elif intent.value == "company_info" and symbol:
+            # Search company info
+            query_results = self.chroma.collections["company_info"].query(
+                query_texts=[f"{symbol} company information"],
+                n_results=limit
+            )
+            results = query_results["documents"][0] if query_results["documents"] else []
+
+        elif intent.value == "news_search":
+            # Search news archive
+            query_results = self.chroma.collections["news_archive"].query(
+                query_texts=[query],
+                n_results=limit
+            )
+            results = query_results["documents"][0] if query_results["documents"] else []
+
+        else:
+            # General search across all collections
+            all_results = []
+            for collection_name, collection in self.chroma.collections.items():
+                try:
+                    query_results = collection.query(
+                        query_texts=[query],
+                        n_results=max(1, limit // 4)
+                    )
+                    if query_results["documents"]:
+                        all_results.extend(query_results["documents"][0])
+                except Exception as e:
+                    print(f"Error querying {collection_name}: {e}")
+            results = all_results[:limit]
+
+        return {
+            "query": query,
+            "intent": intent.value,
+            "symbol": symbol,
+            "date": date_str,
+            "results": results,
+            "count": len(results),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
+# Global instances
 chroma_service = ChromaService()
+rag_engine = RAGQueryEngine()

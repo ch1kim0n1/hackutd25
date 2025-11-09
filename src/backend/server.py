@@ -27,8 +27,7 @@ from services.mock_plaid import mock_plaid_data
 from services.news_aggregator import news_aggregator
 from integrations.alpaca_broker import AlpacaBroker
 from war_room_interface import WarRoomInterface
-from services.rag.chroma_service import ChromaService
-from services.rag.query_engine import RAGQueryEngine
+from services.rag.chroma_service import ChromaService, RAGQueryEngine, rag_engine
 from services.finance_adapter import FinanceAdapter
 from services.logging_service import logger as structured_logger, RequestLogger
 from middleware.exception_handler import setup_exception_handlers
@@ -284,13 +283,48 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Root endpoint with basic server info"""
     return {
         "name": "APEX API",
         "version": "1.0.0",
         "status": "running",
         "timestamp": datetime.now().isoformat()
     }
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Standard health check endpoint for monitoring/load balancers.
+    Returns 200 if server is running.
+    """
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "apex-backend"
+    }
+
+
+@app.get("/ready")
+async def readiness_check():
+    """
+    Readiness check endpoint - verifies server can handle requests.
+    Checks if critical services (orchestrator, etc.) are initialized.
+    """
+    is_ready = orchestrator is not None
+    status_code = 200 if is_ready else 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ready": is_ready,
+            "timestamp": datetime.now().isoformat(),
+            "service": "apex-backend",
+            "checks": {
+                "orchestrator": orchestrator is not None
+            }
+        }
+    )
 
 
 @app.get("/api/status", response_model=StatusResponse)
@@ -333,7 +367,7 @@ async def login(request: LoginRequest):
             "expires_in": 900
         }
     """
-    from services.auth import login_user
+    from services.security import login_user
     return await login_user(request.username, request.password)
 
 
@@ -354,7 +388,7 @@ async def refresh(request: RefreshTokenRequest):
             "expires_in": 900
         }
     """
-    from services.auth import refresh_access_token
+    from services.security import refresh_access_token
     return await refresh_access_token(request.refresh_token)
 
 
@@ -371,7 +405,7 @@ async def logout(background_tasks: BackgroundTasks, request: Request):
             "message": "Successfully logged out"
         }
     """
-    from services.auth import logout_user
+    from services.security import logout_user
     
     auth_header = request.headers.get("authorization", "")
     
@@ -400,7 +434,7 @@ async def get_me(request: Request):
             "created_at": "2024-01-01T00:00:00Z"
         }
     """
-    from services.auth import get_current_user
+    from services.security import get_current_user
     
     auth_header = request.headers.get("authorization", "")
     
@@ -1727,7 +1761,7 @@ async def execute_voice_command(
         Authorization: Bearer <access_token>
     """
     from middleware.auth import get_current_user_from_request
-    from services.voice_security import (
+    from services.voice import (
         voice_command_tracker, VoiceCommandValidator, CommandType, VoiceCommandLogger
     )
     import uuid

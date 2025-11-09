@@ -1,0 +1,106 @@
+graph TD
+    %% Frontend Layer
+    subgraph "Frontend (React/TypeScript)"
+        FE[React App] --> API[API Client]
+        FE --> WS[WebSocket Client]
+        FE --> State[State Management]
+    end
+
+    %% API Gateway Layer
+    subgraph "API Layer (FastAPI)"
+        Server[server.py<br/>2,554 LOC ⚠️] --> AuthAPI[api/auth.py]
+        Server --> MarketAPI[api/market.py]
+        Server --> PortfolioAPI[api/portfolio.py]
+        Server --> TradeAPI[api/trades.py]
+        Server --> StrategyAPI[api/strategy.py]
+    end
+
+    %% Service Layer
+    subgraph "Service Layer"
+        Server --> Orchestrator[orchestrator.py<br/>Agent Coordination]
+        Server --> VoiceSvc[services/voice.py<br/>STT/TTS + Security]
+        Server --> RAGSvc[services/rag/chroma_service.py<br/>Vector DB + Queries]
+        Server --> SecuritySvc[services/security.py<br/>Auth + Encryption]
+        Server --> FinanceAdapter[services/finance_adapter.py<br/>Plaid/Mock]
+
+        Orchestrator --> AgentNetwork[core/agent_network.py<br/>Redis PubSub]
+        Orchestrator --> Agents[Agent System]
+
+        Agents --> MarketAgent[agents/market_agent.py<br/>News + Analysis]
+        Agents --> StrategyAgent[agents/strategy_agent.py<br/>Portfolio Opt]
+        Agents --> RiskAgent[agents/risk_agent.py<br/>Monte Carlo]
+        Agents --> ExecutorAgent[agents/executor_agent.py<br/>Trade Exec]
+        Agents --> ExplainerAgent[agents/explainer_agent.py<br/>Education]
+    end
+
+    %% External Integrations
+    subgraph "External Integrations"
+        AlpacaBroker[integrations/alpaca_broker.py<br/>Trading API]
+        PlaidIntegration[services/plaid_integration.py<br/>Finance API]
+        CrashEngine[engines/crash_scenario_engine.py<br/>Simulations]
+
+        VoiceSvc --> Whisper[Whisper AI<br/>STT]
+        VoiceSvc --> EdgeTTS[Edge TTS<br/>Speech Synthesis]
+
+        RAGSvc --> ChromaDB[(ChromaDB<br/>Vector Store)]
+        RAGSvc --> SentenceTransformers[Sentence Transformers<br/>Embeddings]
+    end
+
+    %% Data Layer
+    subgraph "Data Layer"
+        PostgresDB[(PostgreSQL<br/>Primary DB)]
+        RedisDB[(Redis<br/>Cache + PubSub)]
+
+        Models --> UserModel[models/user.py]
+        Models --> PortfolioModel[models/portfolio.py]
+        Models --> TradeModel[models/trade.py]
+        Models --> GoalModel[models/goal.py]
+
+        DAOs --> UserDAO[services/dao/user_dao.py]
+        DAOs --> GoalDAO[services/dao/goal_dao.py]
+        DAOs --> PortfolioDAO[services/dao/portfolio_dao.py]
+    end
+
+    %% Infrastructure
+    subgraph "Infrastructure"
+        Alembic[alembic/<br/>DB Migrations]
+        LoggingSvc[services/logging_service.py<br/>Structured Logging]
+        Middleware[middleware/<br/>Auth, Exceptions]
+    end
+
+    %% Connections
+    Server --> PostgresDB
+    Server --> RedisDB
+    Orchestrator --> RedisDB
+    AgentNetwork --> RedisDB
+
+    MarketAgent --> OpenRouter[OpenRouter API<br/>NVIDIA Models]
+    StrategyAgent --> OpenRouter
+    RiskAgent --> OpenRouter
+    ExplainerAgent --> OpenRouter
+
+    AlpacaBroker --> AlpacaAPI[Alpaca Markets API]
+    PlaidIntegration --> PlaidAPI[Plaid API]
+
+    Models --> PostgresDB
+    DAOs --> Models
+    Server --> DAOs
+
+    Server --> AlpacaBroker
+    FinanceAdapter --> PlaidIntegration
+    FinanceAdapter --> MockPlaid[services/mock_plaid.py]
+
+    Server --> CrashEngine
+
+    %% Styling
+    classDef critical fill:#ff6b6b,stroke:#d63031,color:#fff
+    classDef large fill:#fdcb6e,stroke:#e17055,color:#000
+    classDef service fill:#00b894,stroke:#00a085,color:#fff
+    classDef external fill:#6c5ce7,stroke:#5f27cd,color:#fff
+    classDef data fill:#a29bfe,stroke:#8c7ae6,color:#fff
+
+    class Server critical
+    class Orchestrator large
+    class VoiceSvc,SecuritySvc,RAGSvc service
+    class OpenRouter,AlpacaAPI,PlaidAPI,Whisper,EdgeTTS external
+    class PostgresDB,RedisDB,ChromaDB data

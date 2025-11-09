@@ -4,6 +4,7 @@ Alembic migration environment for APEX.
 Handles both synchronous (offline) and asynchronous (online) migrations.
 """
 import asyncio
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -34,6 +35,17 @@ from models import (
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# SECURITY: Override sqlalchemy.url from environment variable if set
+# This prevents hardcoded credentials in alembic.ini
+if os.getenv("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))
+elif not config.get_main_option("sqlalchemy.url"):
+    # Fallback to default local development URL
+    config.set_main_option(
+        "sqlalchemy.url",
+        "postgresql+asyncpg://apex_user:apex_password@localhost:5432/apex_db"
+    )
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

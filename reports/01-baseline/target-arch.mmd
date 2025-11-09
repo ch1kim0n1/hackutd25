@@ -1,0 +1,186 @@
+graph TB
+    subgraph "User Interface"
+        Web[Web Browser<br/>localhost:5173]
+        Electron[Electron App<br/>Desktop Wrapper]
+    end
+
+    subgraph "Frontend Layer (React/TypeScript)"
+        React[React 18 + Vite<br/>31 Components]
+        TypedAPI[Typed API Client<br/>openapi-typescript]
+        WebSocketClient[WebSocket Client<br/>Normalized]
+        State[State Management<br/>React Hooks]
+
+        React --> TypedAPI
+        React --> WebSocketClient
+        React --> State
+    end
+
+    subgraph "API Gateway (FastAPI)"
+        Health[Health Checks<br/>/health, /ready]
+        Routes[API Routes<br/>app/api/routes/]
+        WebSocket[WebSocket Manager<br/>app/api/websocket.py]
+        Middleware[CORS + Auth<br/>app/middleware/]
+
+        FastAPI[FastAPI App<br/>app/main.py<br/>~50 LOC] --> Health
+        FastAPI --> Routes
+        FastAPI --> WebSocket
+        FastAPI --> Middleware
+    end
+
+    subgraph "Business Logic Layer"
+        Orchestrator[Orchestrator<br/>app/services/orchestrator.py]
+        AgentSvc[Agent Service<br/>app/services/agents/]
+        SimulationSvc[Simulation Service<br/>app/services/simulations/]
+
+        Orchestrator --> AgentSvc
+        Orchestrator --> SimulationSvc
+    end
+
+    subgraph "Agent System (APEX Core)"
+        MarketAgent[Market Agent<br/>agents/market_agent.py]
+        StrategyAgent[Strategy Agent<br/>agents/strategy_agent.py]
+        RiskAgent[Risk Agent<br/>agents/risk_agent.py]
+        ExecutorAgent[Executor Agent<br/>agents/executor_agent.py]
+        ExplainerAgent[Explainer Agent<br/>agents/explainer_agent.py]
+
+        AgentSvc --> MarketAgent
+        AgentSvc --> StrategyAgent
+        AgentSvc --> RiskAgent
+        AgentSvc --> ExecutorAgent
+        AgentSvc --> ExplainerAgent
+    end
+
+    subgraph "Clean Service Layer"
+        VoiceSvc[Voice Service<br/>app/services/voice.py]
+        AuthSvc[Auth Service<br/>app/services/auth.py]
+        RAGSvc[RAG Service<br/>app/services/rag.py]
+        FinanceSvc[Finance Service<br/>app/services/finance.py]
+        TradingSvc[Trading Service<br/>app/services/trading.py]
+    end
+
+    subgraph "Adapter Layer"
+        AlpacaAdapter[Alpaca Adapter<br/>app/adapters/alpaca.py]
+        PlaidAdapter[Plaid Adapter<br/>app/adapters/plaid.py]
+        NewsAdapter[News Adapter<br/>app/adapters/news.py]
+        VoiceAdapter[Voice Adapter<br/>app/adapters/voice.py]
+    end
+
+    subgraph "Domain Models"
+        UserModel[User Model<br/>app/models/user.py]
+        PortfolioModel[Portfolio Model<br/>app/models/portfolio.py]
+        TradeModel[Trade Model<br/>app/models/trade.py]
+        GoalModel[Goal Model<br/>app/models/goal.py]
+        AgentLogModel[Agent Log<br/>app/models/agent_log.py]
+    end
+
+    subgraph "Repository Layer"
+        UserRepo[User Repository<br/>app/repositories/user.py]
+        PortfolioRepo[Portfolio Repository<br/>app/repositories/portfolio.py]
+        TradeRepo[Trade Repository<br/>app/repositories/trade.py]
+        GoalRepo[Goal Repository<br/>app/repositories/goal.py]
+    end
+
+    subgraph "External APIs"
+        OpenRouter[OpenRouter API<br/>NVIDIA Llama Models]
+        Alpaca[Alpaca API<br/>Trading Platform]
+        Plaid[Plaid API<br/>Financial Data]
+        NewsAPI[News RSS Feeds<br/>Yahoo, CNBC, WSJ]
+    end
+
+    subgraph "Data Layer"
+        PostgreSQL[(PostgreSQL<br/>Primary Database)]
+        Redis[(Redis<br/>Cache + PubSub)]
+        ChromaDB[(ChromaDB<br/>Vector Database)]
+    end
+
+    subgraph "Infrastructure"
+        Config[Settings<br/>app/core/settings.py<br/>pydantic-settings]
+        Logging[Structured Logging<br/>app/core/logging.py]
+        Database[Database<br/>app/core/database.py]
+        Events[Event Bus<br/>app/core/events.py]
+        BackgroundJobs[Background Jobs<br/>app/workers/]
+    end
+
+    %% Connections
+    Web --> React
+    Electron --> React
+
+    React --> FastAPI
+    TypedAPI --> Routes
+
+    Routes --> Orchestrator
+    Routes --> VoiceSvc
+    Routes --> AuthSvc
+    Routes --> RAGSvc
+    Routes --> FinanceSvc
+    Routes --> TradingSvc
+
+    Orchestrator --> AgentSvc
+    AgentSvc --> SimulationSvc
+
+    VoiceSvc --> VoiceAdapter
+    FinanceSvc --> PlaidAdapter
+    TradingSvc --> AlpacaAdapter
+    RAGSvc --> NewsAdapter
+
+    MarketAgent --> OpenRouter
+    StrategyAgent --> OpenRouter
+    RiskAgent --> OpenRouter
+    ExplainerAgent --> OpenRouter
+
+    MarketAgent --> NewsAPI
+
+    ExecutorAgent --> Alpaca
+
+    PlaidAdapter --> Plaid
+    AlpacaAdapter --> Alpaca
+    NewsAdapter --> NewsAPI
+    VoiceAdapter --> OpenRouter
+
+    AgentSvc --> UserRepo
+    FinanceSvc --> PortfolioRepo
+    TradingSvc --> TradeRepo
+    VoiceSvc --> GoalRepo
+
+    UserRepo --> UserModel
+    PortfolioRepo --> PortfolioModel
+    TradeRepo --> TradeModel
+    GoalRepo --> GoalModel
+
+    UserModel --> PostgreSQL
+    PortfolioModel --> PostgreSQL
+    TradeModel --> PostgreSQL
+    GoalModel --> PostgreSQL
+    AgentLogModel --> PostgreSQL
+
+    Orchestrator --> Events
+    Events --> Redis
+
+    RAGSvc --> ChromaDB
+    Config --> PostgreSQL
+    Config --> Redis
+
+    %% Styling
+    classDef ui fill:#0984e3,stroke:#0984e3,color:#fff
+    classDef api fill:#00b894,stroke:#00b894,color:#fff
+    classDef business fill:#fdcb6e,stroke:#fdcb6e,color:#000
+    classDef agents fill:#e17055,stroke:#e17055,color:#fff
+    classDef services fill:#6c5ce7,stroke:#6c5ce7,color:#fff
+    classDef adapters fill:#fd79a8,stroke:#fd79a8,color:#fff
+    classDef models fill:#f39c12,stroke:#f39c12,color:#fff
+    classDef repos fill:#9b59b6,stroke:#9b59b6,color:#fff
+    classDef external fill:#34495e,stroke:#34495e,color:#fff
+    classDef data fill:#e74c3c,stroke:#e74c3c,color:#fff
+    classDef infra fill:#95a5a6,stroke:#95a5a6,color:#fff
+
+    class Web,Electron,React ui
+    class FastAPI,Health,Routes,WebSocket,Middleware api
+    class Orchestrator,AgentSvc,SimulationSvc business
+    class MarketAgent,StrategyAgent,RiskAgent,ExecutorAgent,ExplainerAgent agents
+    class VoiceSvc,AuthSvc,RAGSvc,FinanceSvc,TradingSvc services
+    class AlpacaAdapter,PlaidAdapter,NewsAdapter,VoiceAdapter adapters
+    class UserModel,PortfolioModel,TradeModel,GoalModel,AgentLogModel models
+    class UserRepo,PortfolioRepo,TradeRepo,GoalRepo repos
+    class OpenRouter,Alpaca,Plaid,NewsAPI external
+    class PostgreSQL,Redis,ChromaDB data
+    class Config,Logging,Database,Events,BackgroundJobs infra

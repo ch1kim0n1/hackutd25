@@ -20,8 +20,8 @@ class FinanceAdapter:
         
         if self.use_real_plaid:
             try:
-                from services.plaid_service import PlaidService
-                self.plaid_service = PlaidService()
+                from services.plaid_integration import PlaidIntegration
+                self.plaid_service = PlaidIntegration()
                 logger.info("✅ Using REAL Plaid integration")
             except Exception as e:
                 logger.warning(f"Failed to initialize real Plaid: {e}. Falling back to mock.")
