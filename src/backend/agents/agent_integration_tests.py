@@ -185,6 +185,6 @@ class SimpleTests:
             self.failed += 1
 
 if __name__ == "__main__":
-    api_key = "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"
+    api_key = "api-key"
     tester = SimpleTests(api_key)
     success = tester.run_all()
