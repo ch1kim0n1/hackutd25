@@ -1,369 +1,90 @@
 """
-APEX Multi-Agent Orchestrator
-Coordinates conversations between Market, Strategy, and Risk agents.
-Allows agents to debate, refine, and iterate on investment decisions.
+APEX Multi-Agent Orchestrator - WITH DELIBERATION PHASE
+Coordinates agents with a new "reasoning roundtable" where agents discuss strategy.
 """
 
 from typing import Dict, List, Optional, Callable
 from datetime import datetime
-from enum import Enum
-import logging
+from openai import OpenAI
 import time
 
-try:
-    from output_refinement_pipeline import RefinementPipeline
-    REFINEMENT_AVAILABLE = True
-except ImportError:
-    REFINEMENT_AVAILABLE = False
-    print("⚠️  Output Refinement Pipeline not available")
 
-
-class OrchestratorState(Enum):
-    """State machine states for orchestrator workflow"""
-    IDLE = "idle"
-    SCANNING = "scanning"
-    STRATEGIZING = "strategizing"
-    RISK_CHECK = "risk_check"
-    EXECUTING = "executing"
-    EXPLAINING = "explaining"
-    WAITING_USER = "waiting_user"
-    PAUSED = "paused"
-    ERROR = "error"
-
-
-class Orchestrator:
+class AgentOrchestrator:
     """
     Orchestrates multi-agent conversations for APEX investment system.
     
-    The orchestrator manages the flow of information between agents,
-    allowing them to debate, challenge, and refine recommendations
-    through multiple rounds of discussion.
-    
-    Conversation Flow (per round):
-    1. Market Agent: Provides environment analysis
-    2. Strategy Agent: Proposes allocation based on market conditions
-    3. Risk Agent: Validates strategy and provides concerns
-    4. Strategy Agent: Responds to risk concerns (if rejected)
-    5. (Repeat for max_rounds or until consensus)
-    
-    User can interrupt at any point to provide input or override.
+    NEW FLOW:
+    1. Market Agent: Scan environment (once)
+    2. Strategy Agent: Propose strategy (once)
+    3. Risk Agent: Validate with Monte Carlo (once)
+    4. DELIBERATION PHASE: Agents discuss via simulated conversation
+       - User can interrupt anytime
+       - Runs for max_deliberation_rounds or until user says "finalize"
+    5. Final recommendation
     """
-
-    def __init__(self, redis_url: str = "redis://localhost:6379"):
-        self.logger = logging.getLogger(__name__)
-        self.redis_url = redis_url
-
-        # Agent network for communication
-        self.network = AgentNetwork(redis_url=redis_url)
-
-        # Initialize all agents
-        self.agents = {
-            "market": MarketAgent(agent_network=self.network),
-            "strategy": StrategyAgent(agent_network=self.network),
-            "risk": RiskAgent(agent_network=self.network),
-            "executor": ExecutorAgent(agent_network=self.network),
-            "explainer": ExplainerAgent(agent_network=self.network),
-            "user": None  # Will be initialized after UserAgent is created
-        }
-
-        # State management
-        self.state = OrchestratorState.IDLE
-        self.is_paused = False
-        self.is_running = False
-
-        # Decision tracking
-        self.current_decision = {
-            "market_report": None,
-            "strategy": None,
-            "risk_assessment": None,
-            "execution_result": None,
-            "explanation": None,
-            "user_input": None
-        }
-        self.decision_history: List[Dict[str, Any]] = []
-
-        # Configuration
-        self.config = {
-            "scan_interval": 300,  # 5 minutes
-            "max_retries": 3,
-            "user_timeout": 60,  # seconds to wait for user input
-            "enable_auto_execute": False,  # Require user approval for trades
-            "refinement": {
-                "enabled": REFINEMENT_AVAILABLE,
-                "explanation_level": "beginner",  # beginner/intermediate/advanced
-                "max_terms_per_output": 10,
-                "format": "terminal"  # terminal/web/both
-            }
-        }
-
-        # Error tracking
-        self.error_count = 0
-        self.max_errors = 10
-
-        # Output Refinement Pipeline
-        self.refinement_pipeline = None
-
-    async def initialize(self):
-        """Initialize the orchestrator and all agents"""
-        self.logger.info("🚀 Initializing APEX Orchestrator...")
-
-        try:
-            # Initialize agent network
-            await self.network.initialize()
-            self.logger.info("✓ Agent network initialized")
-
-            # Subscribe to key channels
-            await self._subscribe_to_channels()
-            self.logger.info("✓ Subscribed to agent channels")
-
-            # Initialize User Agent (when available)
-            try:
-                self.agents["user"] = UserAgent(agent_network=self.network)
-                self.logger.info("✓ User Agent initialized")
-            except Exception as e:
-                self.logger.warning(f"⚠ User Agent not available: {e}")
-
-            # Initialize Output Refinement Pipeline
-            if REFINEMENT_AVAILABLE and self.config["refinement"]["enabled"]:
-                try:
-                    self.refinement_pipeline = RefinementPipeline(
-                        explanation_level=self.config["refinement"]["explanation_level"],
-                        max_terms=self.config["refinement"]["max_terms_per_output"]
-                    )
-                    self.logger.info("✓ Output Refinement Pipeline initialized")
-                    stats = self.refinement_pipeline.get_stats()
-                    self.logger.info(f"   Glossary terms: {stats['glossary_terms']}")
-                    self.logger.info(f"   Explanation level: {stats['explanation_level']}")
-                except Exception as e:
-                    self.logger.warning(f"⚠ Refinement Pipeline failed: {e}")
-                    self.refinement_pipeline = None
-
-            self.state = OrchestratorState.IDLE
-            self.logger.info("✅ Orchestrator ready")
-
-        except Exception as e:
-            self.logger.error(f"❌ Failed to initialize orchestrator: {e}")
-            self.state = OrchestratorState.ERROR
-            raise
-
-    async def _subscribe_to_channels(self):
-        """Subscribe orchestrator to relevant agent channels"""
-        channels = [
-            "market_update",
-            "strategy.updated",
-            "risk_assessment",
-            "trade_executed",
-            "trade_explanation",
-            "user_input",
-            "agent_pause",
-            "agent_resume"
-        ]
-
-        for channel in channels:
-            # Note: actual subscription handled by agent network
-            self.logger.debug(f"Monitoring channel: {channel}")
-
-    async def start(self):
-        """Start the main orchestrator loop"""
-        if self.is_running:
-            self.logger.warning("Orchestrator already running")
-            return
-
-        self.is_running = True
-        self.logger.info("🎬 Starting orchestrator main loop")
-
-        # Start background message listener
-        asyncio.create_task(self._message_listener())
-
-        # Start main decision loop
-        while self.is_running:
-            try:
-                if self.is_paused:
-                    await asyncio.sleep(1)
-                    continue
-
-                if self.state == OrchestratorState.IDLE:
-                    await self._execute_decision_cycle()
-                    await asyncio.sleep(self.config["scan_interval"])
-
-                elif self.state == OrchestratorState.ERROR:
-                    self.logger.error("Orchestrator in error state, attempting recovery...")
-                    await asyncio.sleep(30)
-                    self.state = OrchestratorState.IDLE
-                    self.error_count = 0
-
-                else:
-                    # State machine is progressing, check periodically
-                    await asyncio.sleep(1)
-
-            except Exception as e:
-                self.logger.error(f"Error in main loop: {e}")
-                self.error_count += 1
-
-                if self.error_count >= self.max_errors:
-                    self.logger.critical("Max errors reached, stopping orchestrator")
-                    self.state = OrchestratorState.ERROR
-                    self.is_running = False
-                else:
-                    await asyncio.sleep(5)
-
-    async def _execute_decision_cycle(self):
-        """Execute one complete decision cycle through all agents"""
-        cycle_start = datetime.now()
-        self.logger.info("=" * 60)
-        self.logger.info("📊 Starting new decision cycle")
-
-        try:
-            # Reset current decision
-            self.current_decision = {k: None for k in self.current_decision.keys()}
-
-            # Step 1: Market Scanning
-            await self._transition_state(OrchestratorState.SCANNING)
-            market_report = await self._run_market_scan()
-            if not market_report:
-                self.logger.warning("Market scan failed, aborting cycle")
-                await self._transition_state(OrchestratorState.IDLE)
-                return
-
-            self.current_decision["market_report"] = market_report
-            await self.network.broadcast_agent_communication(
-                from_agent="market",
-                to_agent="strategy",
-                message=f"Market scan complete. VIX: {market_report.get('vix_level', 'N/A')}, "
-                        f"Alerts: {len(market_report.get('alerts', []))}"
-            )
-
-            # Step 2: Strategy Generation
-            await self._transition_state(OrchestratorState.STRATEGIZING)
-            strategy = await self._run_strategy_generation(market_report)
-            if not strategy:
-                self.logger.warning("Strategy generation failed, aborting cycle")
-                await self._transition_state(OrchestratorState.IDLE)
-                return
-
-            self.current_decision["strategy"] = strategy
-            await self.network.broadcast_agent_communication(
-                from_agent="strategy",
-                to_agent="risk",
-                message=f"Proposed {len(strategy.get('recommendations', []))} trades. "
-                        f"Allocation adjustments: {strategy.get('target_allocation', {})}"
-            )
-
-            # Step 3: Risk Assessment
-            await self._transition_state(OrchestratorState.RISK_CHECK)
-            risk_assessment = await self._run_risk_check(strategy)
-            if not risk_assessment:
-                self.logger.warning("Risk assessment failed, aborting cycle")
-                await self._transition_state(OrchestratorState.IDLE)
-                return
-
-            self.current_decision["risk_assessment"] = risk_assessment
-
-            # Check if risk agent approved the strategy
-            if risk_assessment.get("approval") != "approved":
-                self.logger.warning(f"❌ Strategy rejected by Risk Agent: {risk_assessment.get('reason')}")
-                await self.network.broadcast_agent_communication(
-                    from_agent="risk",
-                    to_agent="all",
-                    message=f"⚠️ Strategy REJECTED: {risk_assessment.get('reason', 'High risk detected')}"
-                )
-
-                # Save rejected decision to history
-                self._save_decision_to_history(status="rejected", reason=risk_assessment.get('reason'))
-                await self._transition_state(OrchestratorState.IDLE)
-                return
-
-            await self.network.broadcast_agent_communication(
-                from_agent="risk",
-                to_agent="executor",
-                message=f"✅ Strategy approved. Risk score: {risk_assessment.get('risk_score', 0):.2f}. "
-                        f"Proceeding to execution."
-            )
-
-            # Step 4: Wait for User Approval (if configured)
-            if not self.config["enable_auto_execute"]:
-                await self._transition_state(OrchestratorState.WAITING_USER)
-                self.logger.info("⏸ Waiting for user approval to execute trades...")
-
-                await self.network.broadcast_agent_communication(
-                    from_agent="system",
-                    to_agent="user",
-                    message="🤚 Strategy ready for execution. Please review and approve, or provide feedback."
-                )
-
-                # Wait for user input with timeout
-                user_approved = await self._wait_for_user_approval()
-
-                if not user_approved:
-                    self.logger.info("User did not approve, skipping execution")
-                    self._save_decision_to_history(status="user_rejected")
-                    await self._transition_state(OrchestratorState.IDLE)
-                    return
-
-            # Step 5: Execute Trades
-            await self._transition_state(OrchestratorState.EXECUTING)
-            execution_result = await self._run_trade_execution(strategy)
-            if not execution_result:
-                self.logger.warning("Trade execution failed")
-                await self._transition_state(OrchestratorState.IDLE)
-                return
-
-            self.current_decision["execution_result"] = execution_result
-            await self.network.broadcast_agent_communication(
-                from_agent="executor",
-                to_agent="explainer",
-                message=f"Executed {len(execution_result.get('trades', []))} trades. "
-                        f"Total value: ${execution_result.get('total_value', 0):,.2f}"
-            )
-
-            # Step 6: Explain to User
-            await self._transition_state(OrchestratorState.EXPLAINING)
-            explanation = await self._run_explanation(execution_result)
-            self.current_decision["explanation"] = explanation
-
-            # Use refined output if available, otherwise use original
-            if explanation.get("refined"):
-                display_message = explanation["refined"]["terminal"]
-            else:
-                display_message = f"📝 {explanation.get('summary', 'Trades executed successfully.')}"
-
-            await self.network.broadcast_agent_communication(
-                from_agent="explainer",
-                to_agent="user",
-                message=display_message
-            )
-
-            # Save successful decision to history
-            cycle_duration = (datetime.now() - cycle_start).total_seconds()
-            self._save_decision_to_history(status="completed", duration=cycle_duration)
-
-            self.logger.info(f"✅ Decision cycle completed in {cycle_duration:.1f}s")
-            await self._transition_state(OrchestratorState.IDLE)
-
-        except Exception as e:
-            self.logger.error(f"Error in decision cycle: {e}", exc_info=True)
-            self.error_count += 1
-            await self._transition_state(OrchestratorState.ERROR)
-
-    async def _run_market_scan(self) -> Optional[Dict[str, Any]]:
-        """Run market scanning agent"""
-        try:
-            self.logger.info("🔍 Running market scan...")
-            report = await self.agents["market"].scan_market()
-            return report
-        except Exception as e:
-            self.logger.error(f"Market scan failed: {e}")
-            return None
-
-    async def _run_strategy_generation(self, market_report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Run strategy generation agent"""
-        try:
-            self.logger.info("🧠 Generating strategy...")
-
-            # Get current portfolio (would come from database/broker)
-            current_portfolio = {
-                "cash": 10000,
-                "positions": {}
+    
+    def __init__(
+        self,
+        market_agent,
+        strategy_agent,
+        risk_agent,
+        openrouter_api_key: str,
+        model: str = "nvidia/llama-3.1-nemotron-70b-instruct",
+        max_deliberation_rounds: int = 5,
+        enable_logging: bool = True,
+        require_user_approval: bool = True
+    ):
+        """
+        Initialize orchestrator.
+        
+        Args:
+            market_agent: MarketAgent instance
+            strategy_agent: StrategyAgent instance
+            risk_agent: RiskAgent instance
+            openrouter_api_key: API key for deliberation phase
+            model: Model to use for deliberation
+            max_deliberation_rounds: Max discussion turns
+            enable_logging: Print conversation
+            require_user_approval: Wait for user approval
+        """
+        self.market_agent = market_agent
+        self.strategy_agent = strategy_agent
+        self.risk_agent = risk_agent
+        
+        # Client for deliberation phase
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=openrouter_api_key
+        )
+        self.model = model
+        
+        self.max_deliberation_rounds = max_deliberation_rounds
+        self.logging_enabled = enable_logging
+        self.require_user_approval = require_user_approval
+        
+        # Conversation history
+        self.initial_analysis = {}
+        self.deliberation_history = []
+        
+        # User control
+        self.user_interrupted = False
+        self.user_message = None
+        self.finalize_requested = False
+        
+        self.log("🎭 Orchestrator initialized")
+        self.log(f"⚙️  Max deliberation rounds: {max_deliberation_rounds}")
+    
+    def log(self, message: str, agent: str = "ORCHESTRATOR"):
+        """Print message if logging enabled"""
+        if self.logging_enabled:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            emoji_map = {
+                "ORCHESTRATOR": "🎭",
+                "MARKET": "🔍",
+                "STRATEGY": "🧠",
+                "RISK": "⚠️",
+                "DELIBERATION": "💬",
+                "USER": "👤"
             }
             emoji = emoji_map.get(agent, "💬")
             print(f"[{timestamp}] {emoji} {agent}: {message}")
@@ -381,25 +102,16 @@ class Orchestrator:
         user_input_callback: Optional[Callable] = None
     ) -> Dict:
         """
-        Run complete multi-agent analysis with conversation rounds.
-        
-        Args:
-            current_portfolio: Current portfolio state
-            user_profile: User preferences and goals
-            risk_constraints: Risk limits to enforce
-            available_assets: Tradeable assets (None = use defaults)
-            user_input_callback: Function to call for user input
-                                 Should return {'interrupted': bool, 'message': str}
+        Run complete analysis with deliberation phase.
         
         Returns:
             {
+                'initial_analysis': {...},
+                'deliberation_conversation': [...],
                 'final_recommendation': {...},
-                'approved': True/False,
-                'conversation_rounds': [...],
-                'consensus_reached': True/False,
-                'rounds_taken': 3,
-                'user_approved': True/False,
-                'timestamp': datetime(...)
+                'approved': bool,
+                'user_interrupted': bool,
+                'deliberation_rounds': int
             }
         """
         self.log("="*60)
@@ -407,511 +119,803 @@ class Orchestrator:
         self.log("="*60)
         
         # Reset state
-        self.conversation_history = []
+        self.initial_analysis = {}
+        self.deliberation_history = []
         self.user_interrupted = False
-        self.user_input = None
+        self.user_message = None
+        self.finalize_requested = False
         
-        # Round 0: Market Agent scans environment
-        self.log("\n" + "="*60)
-        self.log("📊 ROUND 0: MARKET ANALYSIS")
-        self.log("="*60)
+        # ===== PHASE 1: INITIAL ANALYSIS (FAST) =====
+        self.log("\n📊 PHASE 1: INITIAL ANALYSIS")
+        self.log("-"*60)
         
+        # Market scan
+        self.log("Market Agent analyzing environment...", "MARKET")
         market_report = self.market_agent.scan_market()
-        self._record_agent_output("MARKET", 0, market_report, "market_analysis")
+        self.log(f"Market: {self._extract_condition(market_report)}, VIX: {market_report['market_data']['vix']:.1f}", "MARKET")
         
-        self.log(f"Market Condition: {self._extract_market_condition(market_report)}")
-        self.log(f"VIX: {market_report['market_data']['vix']:.1f}")
+        # Strategy proposal
+        self.log("Strategy Agent generating proposal...", "STRATEGY")
+        strategy = self.strategy_agent.generate_strategy(
+            market_report=market_report,
+            current_portfolio=current_portfolio,
+            user_profile=user_profile,
+            risk_constraints=risk_constraints,
+            available_assets=available_assets
+        )
+        self.log(f"Strategy: {strategy['strategy_summary'][:60]}...", "STRATEGY")
+        self.log(f"Confidence: {strategy['confidence']*100:.0f}%", "STRATEGY")
         
-        # Check for user interrupt
-        if user_input_callback and self._check_user_interrupt(user_input_callback, 0):
-            return self._handle_user_override(current_portfolio, user_profile)
+        # Risk validation
+        self.log("Risk Agent running Monte Carlo...", "RISK")
+        validation = self.risk_agent.validate_strategy(
+            strategy=strategy,
+            current_portfolio=current_portfolio,
+            user_profile=user_profile,
+            market_report=market_report,
+            risk_constraints=risk_constraints
+        )
+        self.log(f"Risk: {validation['recommendation']}", "RISK")
+        self.log(f"Approved: {'✅' if validation['approved'] else '❌'}", "RISK")
         
-        # Main conversation rounds
-        final_strategy = None
-        final_validation = None
-        consensus_reached = False
+        # Store initial analysis
+        self.initial_analysis = {
+            'market_report': market_report,
+            'strategy': strategy,
+            'validation': validation,
+            'timestamp': datetime.now()
+        }
         
-        for round_num in range(1, self.max_rounds + 1):
-            self.log("\n" + "="*60)
-            self.log(f"🔄 ROUND {round_num} OF {self.max_rounds}")
-            self.log("="*60)
+        # ===== PHASE 2: DELIBERATION (INTERACTIVE) =====
+        self.log("\n💬 PHASE 2: AGENT DELIBERATION")
+        self.log("-"*60)
+        self.log("Agents will now discuss and refine the strategy.")
+        self.log("You can interrupt anytime with feedback or say 'finalize' to conclude.")
+        
+        deliberation_result = self._run_deliberation(
+            initial_analysis=self.initial_analysis,
+            user_profile=user_profile,
+            user_input_callback=user_input_callback
+        )
+        
+        # ===== PHASE 3: FINAL RECOMMENDATION =====
+        self.log("\n🏁 PHASE 3: FINAL RECOMMENDATION")
+        self.log("-"*60)
+        
+        final_recommendation = self._generate_final_recommendation(
+            initial_analysis=self.initial_analysis,
+            deliberation_history=self.deliberation_history,
+            current_portfolio=current_portfolio,      # ← ADD THIS
+            user_profile=user_profile,                # ← ADD THIS
+            risk_constraints=risk_constraints         # ← ADD THIS
+        )
+        
+        # User approval if required
+        user_approved = True
+        if self.require_user_approval and not self.user_interrupted:
+            user_approved = self._get_user_approval(final_recommendation, user_input_callback)
+        
+        # Build result
+        result = {
+            'initial_analysis': self.initial_analysis,
+            'deliberation_conversation': self.deliberation_history,
+            'final_recommendation': final_recommendation,
+            'approved': validation['approved'] and user_approved,
+            'user_interrupted': self.user_interrupted,
+            'user_message': self.user_message,
+            'deliberation_rounds': len(self.deliberation_history),
+            'timestamp': datetime.now()
+        }
+        
+        self.log(f"\n✅ Analysis complete: {'APPROVED' if result['approved'] else 'NOT APPROVED'}")
+        self.log(f"Deliberation rounds: {result['deliberation_rounds']}")
+        
+        return result
+    
+    # ========================================
+    # DELIBERATION PHASE (NEW!)
+    # ========================================
+    
+    def _run_deliberation(
+        self,
+        initial_analysis: Dict,
+        user_profile: Dict,
+        user_input_callback: Optional[Callable]
+    ) -> Dict:
+        """
+        Run deliberation phase where simulated agents discuss strategy.
+        
+        Uses ONE model with different system prompts to simulate 3 agents talking.
+        """
+        market_report = initial_analysis['market_report']
+        strategy = initial_analysis['strategy']
+        validation = initial_analysis['validation']
+        
+        # Build context for deliberation
+        context = self._build_deliberation_context(
+            market_report, strategy, validation, user_profile
+        )
+        
+        # Run deliberation rounds
+        for round_num in range(1, self.max_deliberation_rounds + 1):
+            self.log(f"\n--- Deliberation Round {round_num}/{self.max_deliberation_rounds} ---", "DELIBERATION")
             
-            # Strategy Agent proposes allocation
-            self.log("\n💭 Strategy Agent thinking...")
+            # Check for user input before round
+            if user_input_callback:
+                user_response = user_input_callback(f"deliberation_round_{round_num}")
+                
+                if user_response:
+                    if user_response.get('interrupted'):
+                        self.user_interrupted = True
+                        self.user_message = user_response.get('message', '')
+                        self.log(f"User interrupted: {self.user_message}", "USER")
+                        
+                        # Add user message to conversation
+                        self.deliberation_history.append({
+                            'round': round_num,
+                            'speaker': 'USER',
+                            'message': self.user_message,
+                            'timestamp': datetime.now()
+                        })
+                        
+                        # Continue deliberation with user input
+                        context += f"\n\nUSER INPUT: {self.user_message}\n"
+                    
+                    if user_response.get('finalize'):
+                        self.finalize_requested = True
+                        self.log("User requested finalization", "USER")
+                        break
             
-            # Include feedback from previous round if available
-            previous_feedback = self._get_previous_risk_feedback()
+            # Generate deliberation turn (rotating between agent perspectives)
+            agent_perspective = ['MARKET', 'STRATEGY', 'RISK'][round_num % 3]
             
-            strategy = self.strategy_agent.generate_strategy(
-                market_report=market_report,
-                current_portfolio=current_portfolio,
-                user_profile=user_profile,
-                risk_constraints=risk_constraints,
-                available_assets=available_assets
+            deliberation_turn = self._generate_deliberation_turn(
+                agent_perspective=agent_perspective,
+                context=context,
+                round_num=round_num
             )
             
-            self._record_agent_output("STRATEGY", round_num, strategy, "strategy_proposal")
+            # Add to history
+            self.deliberation_history.append({
+                'round': round_num,
+                'speaker': agent_perspective,
+                'message': deliberation_turn,
+                'timestamp': datetime.now()
+            })
             
-            self.log(f"Strategy: {strategy['strategy_summary'][:80]}...")
-            self.log(f"Confidence: {strategy['confidence']*100:.0f}%")
+            # Display
+            self.log(f"{agent_perspective} Agent:", "DELIBERATION")
+            self.log(deliberation_turn, "DELIBERATION")
             
-            # Check for user interrupt
-            if user_input_callback and self._check_user_interrupt(user_input_callback, round_num):
-                return self._handle_user_override(current_portfolio, user_profile)
+            # Update context
+            context += f"\n\n{agent_perspective} AGENT (Round {round_num}): {deliberation_turn}"
             
-            # Risk Agent validates
-            self.log("\n🔍 Risk Agent validating...")
+            # Check if finalization requested
+            if self.finalize_requested or "FINAL RECOMMENDATION" in deliberation_turn.upper():
+                self.log("Deliberation concluded", "DELIBERATION")
+                break
+        
+        return {
+            'rounds_completed': len(self.deliberation_history),
+            'user_interrupted': self.user_interrupted,
+            'finalized': self.finalize_requested or len(self.deliberation_history) >= self.max_deliberation_rounds
+        }
+    
+    def _generate_deliberation_turn(
+        self,
+        agent_perspective: str,
+        context: str,
+        round_num: int
+    ) -> str:
+        """
+        Generate one turn of deliberation from an agent's perspective.
+        
+        Uses system prompts to simulate different agent viewpoints.
+        """
+        # Define agent personas
+        personas = {
+            'MARKET': """You are the Market Agent. Your focus is on current market conditions, 
+trends, and how external factors affect the investment environment. Reference the market 
+data and news in your responses. Be data-driven and objective.""",
             
-            validation = self.risk_agent.validate_strategy(
-                strategy=strategy,
+            'STRATEGY': """You are the Strategy Agent. Your focus is on portfolio construction, 
+asset allocation, and ensuring the strategy aligns with user goals. You care about balance, 
+diversification, and long-term success. Be solution-oriented.""",
+            
+            'RISK': """You are the Risk Agent. Your focus is on downside protection, constraint 
+validation, and ensuring the strategy doesn't exceed acceptable risk levels. Reference Monte 
+Carlo results and probability distributions. Be cautious but not alarmist."""
+        }
+        
+        system_prompt = f"""{personas[agent_perspective]}
+
+You are participating in a deliberation about an investment strategy. This is round {round_num}.
+
+CRITICAL INSTRUCTIONS:
+- Keep responses to 2-3 sentences maximum
+- Be conversational and natural
+- Reference specific numbers/data when relevant
+- Build on what other agents said
+- If you agree, briefly say why and add new insight
+- If you disagree, explain your concern concisely
+- Do NOT repeat information already stated
+- Focus on moving the discussion forward
+
+This is a discussion among professional advisors, not a presentation."""
+        
+        user_prompt = f"""Continue the deliberation based on the conversation so far:
+
+{context}
+
+Your turn ({agent_perspective} Agent perspective):"""
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=200,  # Keep it brief!
+                temperature=0.7,
+                extra_headers={
+                    "HTTP-Referer": "https://apex-financial.com",
+                    "X-Title": "APEX Deliberation"
+                }
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            self.log(f"Error in deliberation: {e}", "DELIBERATION")
+            return f"I agree with the current approach. ({agent_perspective})"
+    
+    def _build_deliberation_context(
+        self,
+        market_report: Dict,
+        strategy: Dict,
+        validation: Dict,
+        user_profile: Dict
+    ) -> str:
+        """Build initial context for deliberation"""
+        
+        context = f"""INVESTMENT STRATEGY DELIBERATION
+
+USER PROFILE:
+- Risk Tolerance: {user_profile.get('risk_tolerance', 'moderate')}
+- Time Horizon: {user_profile.get('time_horizon', 'long-term')}
+- Experience: {user_profile.get('experience_level', 'beginner')}
+
+MARKET CONDITIONS:
+- S&P 500: ${market_report['market_data']['spy_price']:.2f} ({market_report['market_data']['spy_change_pct']:+.2f}%)
+- VIX: {market_report['market_data']['vix']:.1f}
+- Condition: {self._extract_condition(market_report)}
+
+PROPOSED STRATEGY:
+{strategy['strategy_summary']}
+
+Target Allocation:
+{self._format_simple_allocation(strategy['target_allocation'])}
+
+RISK ANALYSIS:
+- Recommendation: {validation['recommendation']}
+- Median Outcome: ${validation['risk_analysis']['median_outcome']:,.0f}
+- Max Drawdown: {validation['risk_analysis']['max_drawdown']*100:.1f}%
+- Prob of Loss: {validation['risk_analysis']['prob_loss']*100:.1f}%
+"""
+        
+        if validation['violations']:
+            context += f"\nVIOLATIONS: {', '.join(validation['violations'])}"
+        
+        if validation['concerns']:
+            context += f"\nCONCERNS: {', '.join(validation['concerns'])}"
+        
+        context += "\n\nBEGIN DELIBERATION:"
+        
+        return context
+    
+    # ========================================
+    # FINAL RECOMMENDATION
+    # ========================================
+    
+    def _generate_final_recommendation(
+        self,
+        initial_analysis: Dict,
+        deliberation_history: List[Dict]
+    ) -> Dict:
+        """
+        Generate final recommendation after deliberation.
+        
+        Synthesizes initial analysis + deliberation into final decision.
+        """
+        self.log("Synthesizing final recommendation...", "DELIBERATION")
+        
+        strategy = initial_analysis['strategy']
+        validation = initial_analysis['validation']
+        
+        # Build deliberation summary
+        deliberation_summary = "\n\n".join([
+            f"{turn['speaker']}: {turn['message']}"
+            for turn in deliberation_history
+        ])
+        
+        # Generate synthesis
+        prompt = f"""Based on the initial analysis and agent deliberation, provide a final recommendation.
+
+INITIAL STRATEGY:
+{strategy['strategy_summary']}
+
+RISK ASSESSMENT:
+{validation['recommendation']} - {validation['risk_analysis']['median_outcome']:,.0f} median outcome
+
+DELIBERATION SUMMARY:
+{deliberation_summary if deliberation_summary else 'No deliberation occurred'}
+
+Provide a 2-3 sentence FINAL RECOMMENDATION that:
+1. States the final decision (approve/modify/reject)
+2. Highlights key reasoning from deliberation
+3. Addresses main user concerns if any
+
+Be concise and actionable."""
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are synthesizing a final investment recommendation."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=250,
+                temperature=0.6
+            )
+            
+            final_text = response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            self.log(f"Error generating final recommendation: {e}")
+            final_text = f"Recommend {validation['recommendation'].lower()} the proposed strategy."
+        
+        return {
+            'recommendation_text': final_text,
+            'strategy': strategy,
+            'validation': validation,
+            'deliberation_incorporated': len(deliberation_history) > 0,
+            'timestamp': datetime.now()
+        }
+    
+    # ========================================
+    # USER APPROVAL
+    # ========================================
+    
+    def _get_user_approval(
+        self,
+        final_recommendation: Dict,
+        user_input_callback: Optional[Callable]
+    ) -> bool:
+        """Get final user approval"""
+        self.log("Requesting user approval...", "USER")
+        
+        if user_input_callback:
+            try:
+                approval_response = user_input_callback('final_approval')
+                
+                if approval_response:
+                    approved = approval_response.get('approved', False)
+                    self.log(f"User {'approved' if approved else 'rejected'}", "USER")
+                    return approved
+            except Exception as e:
+                self.log(f"Error getting approval: {e}")
+        
+        # Default: approve if validation passed
+        return final_recommendation['validation']['approved']
+    
+    # ========================================
+    # UTILITY METHODS
+    # ========================================
+    
+    def _extract_condition(self, market_report: Dict) -> str:
+        """Extract market condition"""
+        analysis = market_report.get('analysis', '')
+        for condition in ['Bullish', 'Bearish', 'Volatile', 'Mixed', 'Neutral']:
+            if condition in analysis:
+                return condition
+        return 'Neutral'
+    
+    def _format_simple_allocation(self, allocation: Dict) -> str:
+        """Simple allocation format"""
+        lines = []
+        for symbol, weight in sorted(allocation.items(), key=lambda x: x[1], reverse=True):
+            lines.append(f"  {symbol.upper()}: {weight*100:.0f}%")
+        return "\n".join(lines)
+    
+    def get_conversation_summary(self, result: Dict) -> str:
+        """Format conversation for display"""
+        output = f"""
+╔════════════════════════════════════════════════╗
+║     🎭 MULTI-AGENT ANALYSIS SUMMARY           ║
+╚════════════════════════════════════════════════╝
+
+⏰ Completed: {result['timestamp'].strftime('%I:%M:%S %p')}
+💬 Deliberation Rounds: {result['deliberation_rounds']}
+{'👤 User Interrupted: ' + result['user_message'] if result['user_interrupted'] else ''}
+{'✅ APPROVED' if result['approved'] else '❌ NOT APPROVED'}
+
+📊 INITIAL ANALYSIS:
+"""
+        
+        strategy = result['initial_analysis']['strategy']
+        validation = result['initial_analysis']['validation']
+        
+        output += f"   Strategy: {strategy['strategy_summary'][:70]}...\n"
+        output += f"   Risk: {validation['recommendation']}\n\n"
+        
+        if result['deliberation_conversation']:
+            output += "💬 DELIBERATION:\n"
+            for turn in result['deliberation_conversation']:
+                output += f"   [{turn['speaker']}]: {turn['message'][:100]}...\n"
+            output += "\n"
+        
+        output += "🏁 FINAL RECOMMENDATION:\n"
+        output += f"   {result['final_recommendation']['recommendation_text']}\n"
+        output += "\n" + "="*50 + "\n"
+        
+        return output
+    # orchestrator.py
+
+    def _generate_final_recommendation(
+      self,
+      initial_analysis: Dict,
+      deliberation_history: List[Dict],
+      current_portfolio: Dict,
+      user_profile: Dict,
+      risk_constraints: Optional[Dict]
+  ) -> Dict:
+        """
+        Generate final recommendation after deliberation.
+        
+        NOW: Synthesizes a REVISED strategy incorporating deliberation insights.
+        """
+        self.log("Synthesizing final recommendation with revised strategy...", "DELIBERATION")
+        
+        strategy = initial_analysis['strategy']
+        validation = initial_analysis['validation']
+        market_report = initial_analysis['market_report']
+        
+        # If no deliberation occurred, just return original
+        if not deliberation_history:
+            self.log("No deliberation - using original strategy", "DELIBERATION")
+            return {
+                'recommendation_text': strategy['rationale'],
+                'strategy': strategy,
+                'validation': validation,
+                'deliberation_incorporated': False,
+                'revised': False,
+                'timestamp': datetime.now()
+            }
+        
+        # Build deliberation summary
+        deliberation_summary = "\n".join([
+            f"{turn['speaker']}: {turn['message']}"
+            for turn in deliberation_history
+        ])
+        
+        # ===== NEW: SYNTHESIZE REVISED ALLOCATION =====
+        revised_allocation = self._synthesize_revised_allocation(
+            original_strategy=strategy,
+            validation=validation,
+            deliberation_summary=deliberation_summary,
+            user_profile=user_profile
+        )
+        
+        # If allocation changed, re-validate and regenerate trades
+        if revised_allocation != strategy['target_allocation']:
+            self.log("Allocation revised based on deliberation - re-validating...", "DELIBERATION")
+            
+            # Create revised strategy object
+            revised_strategy = {
+                'strategy_summary': strategy['strategy_summary'],
+                'target_allocation': revised_allocation,
+                'confidence': strategy['confidence'],
+                'risk_assessment': strategy['risk_assessment']
+            }
+            
+            # Re-calculate trades for revised allocation
+            revised_strategy['recommended_trades'] = self._generate_trades_for_allocation(
+                target_allocation=revised_allocation,
+                current_portfolio=current_portfolio
+            )
+            
+            # Re-run Risk Agent on revised strategy
+            revised_validation = self.risk_agent.validate_strategy(
+                strategy=revised_strategy,
                 current_portfolio=current_portfolio,
                 user_profile=user_profile,
                 market_report=market_report,
                 risk_constraints=risk_constraints
             )
             
-            self._record_agent_output("RISK", round_num, validation, "risk_validation")
+            self.log(f"Revised strategy: {revised_validation['recommendation']}", "RISK")
             
-            self.log(f"Risk Verdict: {validation['recommendation']}")
-            self.log(f"Approved: {'✅ YES' if validation['approved'] else '❌ NO'}")
+            # Generate final explanation
+            final_text = self._generate_final_explanation(
+                original_strategy=strategy,
+                revised_strategy=revised_strategy,
+                deliberation_summary=deliberation_summary
+            )
             
-            if validation['violations']:
-                self.log(f"Violations: {len(validation['violations'])}")
-            if validation['concerns']:
-                self.log(f"Concerns: {len(validation['concerns'])}")
+            return {
+                'recommendation_text': final_text,
+                'strategy': revised_strategy,      # ✅ NEW revised strategy!
+                'validation': revised_validation,  # ✅ NEW validation!
+                'original_strategy': strategy,     # Keep original for comparison
+                'deliberation_incorporated': True,
+                'revised': True,
+                'timestamp': datetime.now()
+            }
+        
+        else:
+            # Allocation didn't change, but update explanation
+            self.log("Deliberation confirmed original strategy", "DELIBERATION")
             
-            # Check for user interrupt
-            if user_input_callback and self._check_user_interrupt(user_input_callback, round_num):
-                return self._handle_user_override(current_portfolio, user_profile)
+            final_text = self._generate_final_explanation(
+                original_strategy=strategy,
+                revised_strategy=None,
+                deliberation_summary=deliberation_summary
+            )
             
-            # Store latest results
-            final_strategy = strategy
-            final_validation = validation
+            return {
+                'recommendation_text': final_text,
+                'strategy': strategy,
+                'validation': validation,
+                'deliberation_incorporated': True,
+                'revised': False,
+                'timestamp': datetime.now()
+            }
+
+
+    def _synthesize_revised_allocation(
+    self,
+    original_strategy: Dict,
+    validation: Dict,
+    deliberation_summary: str,
+    user_profile: Dict
+) -> Dict[str, float]:
+      """
+      NEW METHOD: Use AI to synthesize a revised allocation based on deliberation.
+      
+      Returns:
+          Dict of {symbol: weight} - revised target allocation
+      """
+      original_allocation = original_strategy['target_allocation']
+      
+      prompt = f"""Based on the agent deliberation, determine the FINAL allocation.
+
+  ORIGINAL PROPOSED ALLOCATION:
+  {self._format_simple_allocation(original_allocation)}
+
+  RISK ASSESSMENT:
+  - Recommendation: {validation['recommendation']}
+  - Violations: {len(validation['violations'])}
+  - Concerns: {len(validation['concerns'])}
+
+  AGENT DELIBERATION:
+  {deliberation_summary}
+
+  USER PROFILE:
+  - Risk Tolerance: {user_profile.get('risk_tolerance', 'moderate')}
+  - Time Horizon: {user_profile.get('time_horizon', 'long-term')}
+
+  TASK: Provide the FINAL allocation incorporating insights from deliberation.
+
+  If deliberation suggested changes (e.g., "increase bonds", "reduce tech exposure"), 
+  incorporate them. If deliberation confirmed the original, keep it.
+
+  Respond ONLY with JSON:
+  {{
+      "SPY": 0.50,
+      "TLT": 0.30,
+      "GLD": 0.10,
+      "cash": 0.10
+  }}
+
+  CRITICAL:
+  - Must sum to 1.0 (100%)
+  - Only include symbols from original allocation or standard ETFs (SPY, QQQ, TLT, IEF, AGG, GLD, SLV, VNQ)
+  - Use the EXACT format shown above
+  - No explanation, just the JSON object"""
+
+      try:
+          response = self.client.chat.completions.create(
+              model=self.model,
+              messages=[
+                  {
+                      "role": "system", 
+                      "content": "You synthesize investment allocations. Output ONLY valid JSON."
+                  },
+                  {"role": "user", "content": prompt}
+              ],
+              max_tokens=300,
+              temperature=0.3  # Lower temp for consistent JSON
+          )
+          
+          response_text = response.choices[0].message.content.strip()
+          
+          # Parse JSON (handle markdown code blocks)
+          import json
+          response_text = response_text.replace('```json', '').replace('```', '').strip()
+          revised_allocation = json.loads(response_text)
+          
+          # Validate allocation
+          total = sum(revised_allocation.values())
+          if not (0.95 <= total <= 1.05):
+              self.log(f"⚠️  Allocation sum {total:.2f} - normalizing", "DELIBERATION")
+              # Normalize
+              revised_allocation = {k: v/total for k, v in revised_allocation.items()}
+          
+          # Log changes
+          self._log_allocation_changes(original_allocation, revised_allocation)
+          
+          return revised_allocation
+          
+      except Exception as e:
+          self.log(f"❌ Error synthesizing allocation: {e} - using original", "DELIBERATION")
+          return original_allocation
+
+
+    def _generate_trades_for_allocation(
+        self,
+        target_allocation: Dict[str, float],
+        current_portfolio: Dict
+    ) -> List[Dict]:
+        """
+        NEW METHOD: Generate trade list to reach target allocation.
+        
+        This replicates what Strategy Agent does internally.
+        """
+        trades = []
+        portfolio_value = current_portfolio['total_value']
+        current_positions = current_portfolio.get('positions', {})
+        
+        # Calculate target dollar amounts
+        for symbol, target_weight in target_allocation.items():
+            if symbol == 'cash':
+                continue  # Skip cash for trades
             
-            # Check if consensus reached
-            if validation['approved']:
-                # Check confidence levels
-                strategy_confident = strategy['confidence'] >= 0.70
-                risk_confident = validation['confidence'] >= 0.70
-                
-                if strategy_confident and risk_confident:
-                    self.log("\n" + "="*60)
-                    self.log("✅ CONSENSUS REACHED - All agents approve!")
-                    self.log("="*60)
-                    consensus_reached = True
-                    break
-                else:
-                    self.log("\n⚠️  Approved but low confidence - continuing discussion...")
+            target_value = portfolio_value * target_weight
+            
+            # Get current position
+            current_position = current_positions.get(symbol, {})
+            current_value = current_position.get('value', 0)
+            current_shares = current_position.get('shares', 0)
+            
+            # Estimate share price
+            if current_shares > 0:
+                share_price = current_value / current_shares
             else:
-                self.log(f"\n❌ Strategy rejected - {len(validation['violations'])} violations, {len(validation['concerns'])} concerns")
-                
-                # If not last round, continue to let Strategy Agent respond
-                if round_num < self.max_rounds:
-                    self.log("↻ Strategy Agent will refine proposal in next round...")
-                else:
-                    self.log("⚠️  Max rounds reached without consensus")
-        
-        # Final decision
-        self.log("\n" + "="*60)
-        self.log("🏁 MULTI-AGENT ANALYSIS COMPLETE")
-        self.log("="*60)
-        
-        # Get user approval if required
-        user_approved = True
-        if self.require_user_approval:
-            user_approved = self._get_user_approval(
-                final_strategy,
-                final_validation,
-                user_input_callback
-            )
-            return result
-
-        except Exception as e:
-            self.logger.error(f"Trade execution failed: {e}")
-            return None
-
-    async def _run_explanation(self, execution_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Run explainer agent with output refinement"""
-        try:
-            self.logger.info("💬 Generating explanation...")
-
-            explanation = await self.agents["explainer"].explain_trades(
-                execution_result=execution_result
-            )
-
-            # Apply output refinement if enabled
-            if self.refinement_pipeline and explanation.get("summary"):
-                self.logger.info("✨ Refining output...")
-
-                refined = self.refinement_pipeline.refine(
-                    text=explanation["summary"],
-                    format=self.config["refinement"]["format"]
-                )
-
-                # Add refined versions to explanation
-                explanation["refined"] = {
-                    "terminal": refined.terminal_output,
-                    "web_html": refined.web_html,
-                    "web_json": refined.web_json,
-                    "markdown": refined.markdown,
-                    "detected_terms": refined.detected_terms,
-                    "definitions": refined.definitions
+                # Rough estimates for common ETFs
+                share_price_estimates = {
+                    'SPY': 475, 'QQQ': 400, 'IWM': 200,
+                    'TLT': 100, 'IEF': 100, 'AGG': 100,
+                    'GLD': 180, 'SLV': 22, 'VNQ': 90
                 }
+                share_price = share_price_estimates.get(symbol, 100)
+            
+            # Calculate shares needed
+            target_shares = int(target_value / share_price)
+            shares_diff = target_shares - current_shares
+            
+            # Generate trade if meaningful difference (>5% change or >$500)
+            value_diff = abs(target_value - current_value)
+            pct_diff = abs(target_value - current_value) / portfolio_value if portfolio_value > 0 else 0
+            
+            if abs(shares_diff) >= 1 and (value_diff > 500 or pct_diff > 0.05):
+                if shares_diff > 0:
+                    trades.append({
+                        'action': 'BUY',
+                        'symbol': symbol,
+                        'shares': shares_diff,
+                        'reason': f'Increase {symbol} to {target_weight*100:.0f}% allocation',
+                        'urgency': 'medium'
+                    })
+                else:
+                    trades.append({
+                        'action': 'SELL',
+                        'symbol': symbol,
+                        'shares': abs(shares_diff),
+                        'reason': f'Reduce {symbol} to {target_weight*100:.0f}% allocation',
+                        'urgency': 'medium'
+                    })
+        
+        return trades
 
-                self.logger.info(f"   Detected {len(refined.detected_terms)} terms")
-                self.logger.info(f"   Provided {len(refined.definitions)} definitions")
 
-            return explanation
-        except Exception as e:
-            self.log(f"Error checking user input: {e}")
-        
-        return False
-    
-    def _get_user_approval(
-        self,
-        strategy: Dict,
-        validation: Dict,
-        user_input_callback: Optional[Callable]
-    ) -> bool:
-        """
-        Get final user approval for strategy.
-        
-        In a real UI, this would show a dialog with approve/reject buttons.
-        For now, we'll use a callback function.
-        """
-        self.log("\n" + "="*60)
-        self.log("👤 REQUESTING USER APPROVAL")
-        self.log("="*60)
-        
-        self.log(f"Strategy: {strategy['strategy_summary']}")
-        self.log(f"Risk Status: {validation['recommendation']}")
-        
-        # If callback provided, use it
-        if user_input_callback:
-            try:
-                approval_response = user_input_callback('approval_request')
-                
-                if approval_response:
-                    approved = approval_response.get('approved', False)
-                    message = approval_response.get('message', '')
-                    
-                    if message:
-                        self.log(f"User message: {message}", agent="USER")
-                    
-                    return approved
-            except Exception as e:
-                self.log(f"Error getting user approval: {e}")
-        
-        # Default: auto-approve if risk agent approved
-        return validation['approved']
-    
-    def _handle_user_override(
-        self,
-        current_portfolio: Dict,
-        user_profile: Dict
-    ) -> Dict:
-        """
-        Handle case where user interrupted and wants to override.
-        """
-        self.log("👤 Processing user override...")
-        
-        # Return a special result indicating user took over
-        return {
-            'final_strategy': None,
-            'final_validation': None,
-            'approved': False,
-            'conversation_rounds': self.conversation_history,
-            'consensus_reached': False,
-            'rounds_taken': len([r for r in self.conversation_history if r['type'] == 'strategy_proposal']),
-            'user_approved': False,
-            'user_interrupted': True,
-            'user_input': self.user_input,
-            'timestamp': datetime.now()
-        }
-    
-    # ========================================
-    # REFINEMENT (Strategy Agent responds to Risk feedback)
-    # ========================================
-    
-    def _refine_strategy_with_feedback(
+    def _generate_final_explanation(
         self,
         original_strategy: Dict,
-        risk_feedback: Dict,
-        market_report: Dict,
-        current_portfolio: Dict,
-        user_profile: Dict,
-        risk_constraints: Optional[Dict]
-    ) -> Dict:
+        revised_strategy: Optional[Dict],
+        deliberation_summary: str
+    ) -> str:
         """
-        Have Strategy Agent refine proposal based on Risk Agent feedback.
-        
-        This creates a more sophisticated conversation where Strategy Agent
-        can respond to specific concerns.
+        NEW METHOD: Generate explanation of final recommendation.
         """
-        self.log("🔄 Strategy Agent refining based on Risk feedback...")
-        
-        # Build a refined prompt that includes risk feedback
-        # This would be added to the Strategy Agent's context
-        
-        # For now, we rely on the Strategy Agent to naturally improve
-        # in the next round based on the conversation history
-        
-        # In a more advanced version, you could have a specific
-        # "refine_strategy" method that takes feedback as input
-        
-        return self.strategy_agent.generate_strategy(
-            market_report=market_report,
-            current_portfolio=current_portfolio,
-            user_profile=user_profile,
-            risk_constraints=risk_constraints
-        )
-    
-    # ========================================
-    # REPORTING & DISPLAY
-    # ========================================
-    
-    def get_conversation_summary(self, result: Dict) -> str:
-        """
-        Format conversation history for display.
-        """
-        output = f"""
-╔════════════════════════════════════════════════╗
-║        🎭 MULTI-AGENT ANALYSIS SUMMARY        ║
-╚════════════════════════════════════════════════╝
+        if revised_strategy:
+            # Strategy was revised
+            prompt = f"""Explain the FINAL investment recommendation after deliberation.
 
-⏰ Completed: {result['timestamp'].strftime('%I:%M:%S %p')}
-🔄 Rounds: {result['rounds_taken']}/{self.max_rounds}
-🤝 Consensus: {'✅ YES' if result['consensus_reached'] else '❌ NO'}
-👤 User Approved: {'✅ YES' if result['user_approved'] else '❌ NO'}
+    ORIGINAL ALLOCATION:
+    {self._format_simple_allocation(original_strategy['target_allocation'])}
 
-"""
+    REVISED ALLOCATION (after deliberation):
+    {self._format_simple_allocation(revised_strategy['target_allocation'])}
+
+    DELIBERATION SUMMARY:
+    {deliberation_summary}
+
+    Provide a 2-3 sentence explanation that:
+    1. States what changed and why
+    2. Highlights the key insight from deliberation
+    3. Confirms this is the final recommendation
+
+    Be concise and clear."""
+        else:
+            # Strategy confirmed
+            prompt = f"""Explain why the original strategy was confirmed after deliberation.
+
+    ALLOCATION:
+    {self._format_simple_allocation(original_strategy['target_allocation'])}
+
+    DELIBERATION SUMMARY:
+    {deliberation_summary}
+
+    Provide 2-3 sentences explaining:
+    1. Why agents agreed with the original strategy
+    2. What deliberation confirmed
+    3. Why this is sound
+
+    Be concise and confident."""
         
-        # Show conversation flow
-        output += "📜 CONVERSATION HISTORY:\n"
-        output += "─" * 50 + "\n\n"
-        
-        current_round = -1
-        for entry in result['conversation_rounds']:
-            # New round header
-            if entry['round'] != current_round:
-                current_round = entry['round']
-                output += f"\n{'='*50}\n"
-                output += f"ROUND {current_round}\n"
-                output += f"{'='*50}\n\n"
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You explain investment decisions clearly."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0.6
+            )
             
-            # Agent contribution
-            agent_emoji = {
-                'MARKET': '🔍',
-                'STRATEGY': '🧠',
-                'RISK': '⚠️'
-            }
+            return response.choices[0].message.content.strip()
             
-            emoji = agent_emoji.get(entry['agent'], '💬')
-            output += f"{emoji} {entry['agent']} AGENT:\n"
-            
-            # Summary of output
-            if entry['type'] == 'market_analysis':
-                market_data = entry['output']['market_data']
-                output += f"   • Market: SPY {market_data['spy_change_pct']:+.2f}%, VIX {market_data['vix']:.1f}\n"
-                output += f"   • Alerts: {len(entry['output']['alerts'])}\n"
-            
-            elif entry['type'] == 'strategy_proposal':
-                strategy = entry['output']
-                output += f"   • Summary: {strategy['strategy_summary'][:60]}...\n"
-                output += f"   • Trades: {len(strategy['recommended_trades'])}\n"
-                output += f"   • Confidence: {strategy['confidence']*100:.0f}%\n"
-            
-            elif entry['type'] == 'risk_validation':
-                validation = entry['output']
-                output += f"   • Recommendation: {validation['recommendation']}\n"
-                output += f"   • Approved: {'✅ YES' if validation['approved'] else '❌ NO'}\n"
-                output += f"   • Violations: {len(validation['violations'])}\n"
-                output += f"   • Concerns: {len(validation['concerns'])}\n"
-            
-            output += "\n"
-        
-        # Final recommendation
-        output += "="*50 + "\n"
-        output += "🏁 FINAL RECOMMENDATION\n"
-        output += "="*50 + "\n\n"
-        
-        if result.get('user_interrupted'):
-            output += "👤 User interrupted - no automated recommendation\n"
-        elif result['final_strategy']:
-            strategy = result['final_strategy']
-            validation = result['final_validation']
-            
-            output += f"Strategy: {strategy['strategy_summary']}\n\n"
-            
-            output += "Target Allocation:\n"
-            for symbol, weight in sorted(strategy['target_allocation'].items(), 
-                                        key=lambda x: x[1], reverse=True):
-                output += f"  • {symbol.upper()}: {weight*100:.1f}%\n"
-            
-            output += f"\nRisk Assessment: {validation['risk_assessment'].upper()}\n"
-            output += f"Overall Status: {'✅ APPROVED' if result['approved'] else '❌ NOT APPROVED'}\n"
-        
-        output += "\n" + "="*50 + "\n"
-        
-        return output
-    
-    def get_execution_plan(self, result: Dict) -> Optional[Dict]:
-        """
-        Extract executable trade plan from approved result.
-        
-        Returns None if not approved, otherwise returns trade plan.
-        """
-        if not result['approved']:
-            return None
-        
-        strategy = result['final_strategy']
-        
-        return {
-            'target_allocation': strategy['target_allocation'],
-            'recommended_trades': strategy['recommended_trades'],
-            'strategy_summary': strategy['strategy_summary'],
-            'risk_level': result['final_validation']['risk_assessment'],
-            'confidence': strategy['confidence'],
-            'approved_at': result['timestamp']
-        }
+        except Exception as e:
+            self.log(f"Error generating explanation: {e}")
+            if revised_strategy:
+                return "After deliberation, the allocation was adjusted to better balance risk and return."
+            else:
+                return "After deliberation, agents confirmed the original strategy is optimal."
 
 
-# ========================================
-# SIMPLE USER INPUT CALLBACK EXAMPLE
-# ========================================
-
-class SimpleUserInput:
-    """
-    Example user input handler for demonstrations.
-    
-    In a real UI, this would be connected to buttons, forms, etc.
-    """
-    
-    def __init__(self):
-        self.interrupt_on_round = None
-        self.approve_final = True
-    
-    def __call__(self, context) -> Dict:
-        """
-        Called by orchestrator to check for user input.
+    def _log_allocation_changes(
+        self,
+        original: Dict[str, float],
+        revised: Dict[str, float]
+    ):
+        """Log what changed in allocation"""
+        changes = []
         
-        Args:
-            context: Either round number (int) or 'approval_request' (str)
+        all_symbols = set(original.keys()) | set(revised.keys())
         
-        Returns:
-            Dict with user response
-        """
-        # During rounds
-        if isinstance(context, int):
-            round_num = context
+        for symbol in all_symbols:
+            orig_weight = original.get(symbol, 0)
+            new_weight = revised.get(symbol, 0)
             
-            # Check if user wants to interrupt
-            if self.interrupt_on_round == round_num:
-                return {
-                    'interrupted': True,
-                    'message': 'User requested manual override'
-                }
-            
-            return {'interrupted': False}
+            if abs(new_weight - orig_weight) > 0.01:  # More than 1% change
+                change = new_weight - orig_weight
+                changes.append(f"{symbol}: {orig_weight*100:.0f}% → {new_weight*100:.0f}% ({change*100:+.0f}%)")
         
-        # Final approval
-        elif context == 'approval_request':
-            return {
-                'approved': self.approve_final,
-                'message': 'User approved' if self.approve_final else 'User rejected'
-            }
-        
-        return {}
-
-
-# ========================================
-# EXAMPLE USAGE
-# ========================================
-
-if __name__ == "__main__":
-    from market_agent import MarketAgent
-    from strategy_agent import StrategyAgent
-    from risk_agent import RiskAgent
-    
-    # Initialize all agents
-    openrouter_key = "YOUR_KEY_HERE"
-    model = "nvidia/llama-3.1-nemotron-70b-instruct"
-    
-    market_agent = MarketAgent(openrouter_key, model=model)
-    strategy_agent = StrategyAgent(openrouter_key, model=model)
-    risk_agent = RiskAgent(openrouter_key, model=model, num_simulations=10000)
-    
-    # Create orchestrator
-    orchestrator = AgentOrchestrator(
-        market_agent=market_agent,
-        strategy_agent=strategy_agent,
-        risk_agent=risk_agent,
-        max_rounds=3,
-        require_user_approval=True,
-        auto_approve_threshold=0.80
-    )
-    
-    # Portfolio and user data
-    current_portfolio = {
-        'total_value': 100000,
-        'cash': 10000,
-        'positions': {
-            'SPY': {'shares': 150, 'value': 71298, 'weight': 0.71},
-            'TLT': {'shares': 100, 'value': 9500, 'weight': 0.095},
-            'GLD': {'shares': 50, 'value': 9202, 'weight': 0.092}
-        }
-    }
-    
-    user_profile = {
-        'risk_tolerance': 'moderate',
-        'time_horizon': 'long-term',
-        'goals': ['retirement', 'wealth-building'],
-        'investment_style': 'balanced',
-        'experience_level': 'beginner'
-    }
-    
-    risk_constraints = {
-        'max_position_size': 0.60,
-        'max_drawdown_limit': 0.20,
-        'min_cash_reserve': 0.05
-    }
-    
-    # Simple user input handler (auto-approve)
-    user_input = SimpleUserInput()
-    user_input.approve_final = True  # Auto-approve
-    # user_input.interrupt_on_round = 2  # Uncomment to test interruption
-    
-    # Run analysis
-    print("\n" + "="*60)
-    print("🚀 STARTING MULTI-AGENT ORCHESTRATED ANALYSIS")
-    print("="*60 + "\n")
-    
-    result = orchestrator.run_analysis(
-        current_portfolio=current_portfolio,
-        user_profile=user_profile,
-        risk_constraints=risk_constraints,
-        user_input_callback=user_input
-    )
-    
-    # Display results
-    print("\n")
-    print(orchestrator.get_conversation_summary(result))
-    
-    # Get execution plan if approved
-    if result['approved']:
-        print("\n" + "="*60)
-        print("📋 EXECUTION PLAN")
-        print("="*60 + "\n")
-        
-        plan = orchestrator.get_execution_plan(result)
-        
-        print(f"Strategy: {plan['strategy_summary']}\n")
-        print("Trades to Execute:")
-        for i, trade in enumerate(plan['recommended_trades'], 1):
-            print(f"  {i}. {trade['action']} {trade['shares']} {trade['symbol']}")
-            print(f"     Reason: {trade['reason']}")
-        
-        print(f"\nRisk Level: {plan['risk_level'].upper()}")
-        print(f"Confidence: {plan['confidence']*100:.0f}%")
-    else:
-        print("\n⚠️  Strategy not approved - no execution plan")
+        if changes:
+            self.log("📊 Allocation changes:", "DELIBERATION")
+            for change in changes:
+                self.log(f"   • {change}", "DELIBERATION")
+        else:
+            self.log("📊 No allocation changes - original confirmed", "DELIBERATION")
