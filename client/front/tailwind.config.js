@@ -18,20 +18,7 @@ export default {
       themes: {
         light: {
           colors: {
-            default: {
-              50: "#fafafa",
-              100: "#f2f2f3",
-              200: "#ebebec",
-              300: "#e3e3e6",
-              400: "#dcdcdf",
-              500: "#d4d4d8",
-              600: "#afafb2",
-              700: "#8a8a8c",
-              800: "#656567",
-              900: "#404041",
-              foreground: "#000",
-              DEFAULT: "#d4d4d8"
-            },
+            "default": {           "50": "#fafafa",           "100": "#f2f2f3",           "200": "#ebebec",           "300": "#e3e3e6",           "400": "#dcdcdf",           "500": "#d4d4d8",           "600": "#afafb2",           "700": "#8a8a8c",           "800": "#656567",           "900": "#404041",           "foreground": "#000",           "DEFAULT": "#d4d4d8"         },
             primary: {
               50: "#fdf8e7",
               100: "#fbeec5",
@@ -126,20 +113,20 @@ export default {
         },
         dark: {
           colors: {
-            default: {
-              50: "#05050c",
-              100: "#090918",
-              200: "#0e0e25",
-              300: "#121231",
-              400: "#17173d",
-              500: "#454564",
-              600: "#74748b",
-              700: "#a2a2b1",
-              800: "#d1d1d8",
-              900: "#ffffff",
-              foreground: "#fff",
-              DEFAULT: "#17173d"
-            },
+                    "default": {
+          "50": "#333333",
+          "100": "#666666",
+          "200": "#999999",
+          "300": "#cccccc",
+          "400": "#ffffff",
+          "500": "#ffffff",
+          "600": "#ffffff",
+          "700": "#ffffff",
+          "800": "#ffffff",
+          "900": "#ffffff",
+          "foreground": "#000",
+          "DEFAULT": "#ffffff"
+        },
             primary: {
               50: "#483b13",
               100: "#725e1d",

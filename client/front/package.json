@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@alpacahq/alpaca-trade-api": "^3.1.3",
     "@heroui/button": "2.2.27",
     "@heroui/card": "^2.2.25",
     "@heroui/chip": "^2.2.22",
@@ -31,7 +30,6 @@
     "@radix-ui/react-use-controllable-state": "^1.2.2",
     "@react-aria/visually-hidden": "3.8.28",
     "@react-types/shared": "3.32.1",
-    "@syncfusion/ej2-react-charts": "^31.2.5",
     "@tailwindcss/postcss": "4.1.11",
     "@tailwindcss/vite": "4.1.11",
     "ai": "^5.0.89",
@@ -46,6 +44,7 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "6.23.0",
     "react-syntax-highlighter": "^16.1.0",
+    "recharts": "^3.3.0",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",

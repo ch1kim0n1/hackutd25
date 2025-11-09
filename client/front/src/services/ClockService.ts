@@ -11,12 +11,7 @@ export class ClockService extends AlpacaClient {
    * Get current market clock
    */
   async getClock(): Promise<Clock> {
-    try {
-      const clock = await this.client.getClock();
-      return clock as Clock;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Clock>('GET', '/v2/clock');
   }
 
   /**
@@ -62,12 +57,9 @@ export class ClockService extends AlpacaClient {
     start?: string | Date;
     end?: string | Date;
   }): Promise<Calendar[]> {
-    try {
-      const calendar = await this.client.getCalendar(params);
-      return calendar as Calendar[];
-    } catch (error) {
-      return this.handleError(error);
-    }
+    const queryParams = new URLSearchParams(params as any).toString();
+    const endpoint = `/v2/calendar${queryParams ? `?${queryParams}` : ''}`;
+    return this.request<Calendar[]>('GET', endpoint);
   }
 
   /**

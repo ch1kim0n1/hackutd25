@@ -15,24 +15,16 @@ export class AssetService extends AlpacaClient {
     asset_class?: 'us_equity' | 'crypto';
     exchange?: string;
   }): Promise<Asset[]> {
-    try {
-      const assets = await this.client.getAssets(params);
-      return assets as Asset[];
-    } catch (error) {
-      return this.handleError(error);
-    }
+    const queryParams = new URLSearchParams(params as any).toString();
+    const endpoint = `/v2/assets${queryParams ? `?${queryParams}` : ''}`;
+    return this.request<Asset[]>('GET', endpoint);
   }
 
   /**
    * Get a specific asset by symbol
    */
   async getAsset(symbol: string): Promise<Asset> {
-    try {
-      const asset = await this.client.getAsset(symbol);
-      return asset as Asset;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Asset>('GET', `/v2/assets/${symbol}`);
   }
 
   /**

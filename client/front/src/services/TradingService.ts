@@ -21,12 +21,7 @@ export class TradingService extends AlpacaClient {
    * Create a new order
    */
   async createOrder(orderRequest: CreateOrderRequest): Promise<Order> {
-    try {
-      const order = await this.client.createOrder(orderRequest);
-      return order as Order;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Order>('POST', '/v2/orders', orderRequest);
   }
 
   /**
@@ -169,36 +164,23 @@ export class TradingService extends AlpacaClient {
     nested?: boolean;
     symbols?: string;
   }): Promise<Order[]> {
-    try {
-      const orders = await this.client.getOrders(params);
-      return orders as Order[];
-    } catch (error) {
-      return this.handleError(error);
-    }
+    const queryParams = new URLSearchParams(params as any).toString();
+    const endpoint = `/v2/orders${queryParams ? `?${queryParams}` : ''}`;
+    return this.request<Order[]>('GET', endpoint);
   }
 
   /**
    * Get a specific order by ID
    */
   async getOrder(orderId: string): Promise<Order> {
-    try {
-      const order = await this.client.getOrder(orderId);
-      return order as Order;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Order>('GET', `/v2/orders/${orderId}`);
   }
 
   /**
    * Get order by client order ID
    */
   async getOrderByClientId(clientOrderId: string): Promise<Order> {
-    try {
-      const order = await this.client.getOrderByClientOrderId(clientOrderId);
-      return order as Order;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Order>('GET', `/v2/orders:by_client_order_id?client_order_id=${clientOrderId}`);
   }
 
   /**
@@ -215,35 +197,21 @@ export class TradingService extends AlpacaClient {
       client_order_id?: string;
     }
   ): Promise<Order> {
-    try {
-      const order = await this.client.replaceOrder(orderId, updates);
-      return order as Order;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Order>('PATCH', `/v2/orders/${orderId}`, updates);
   }
 
   /**
    * Cancel an order
    */
   async cancelOrder(orderId: string): Promise<void> {
-    try {
-      await this.client.cancelOrder(orderId);
-    } catch (error) {
-      return this.handleError(error);
-    }
+    await this.request<void>('DELETE', `/v2/orders/${orderId}`);
   }
 
   /**
    * Cancel all orders
    */
   async cancelAllOrders(): Promise<Order[]> {
-    try {
-      const cancelledOrders = await this.client.cancelAllOrders();
-      return cancelledOrders as Order[];
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Order[]>('DELETE', '/v2/orders');
   }
 
   // ==================== POSITIONS ====================
@@ -252,48 +220,34 @@ export class TradingService extends AlpacaClient {
    * Get all open positions
    */
   async getPositions(): Promise<Position[]> {
-    try {
-      const positions = await this.client.getPositions();
-      return positions as Position[];
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Position[]>('GET', '/v2/positions');
   }
 
   /**
    * Get a specific position by symbol
    */
   async getPosition(symbol: string): Promise<Position> {
-    try {
-      const position = await this.client.getPosition(symbol);
-      return position as Position;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Position>('GET', `/v2/positions/${symbol}`);
   }
 
   /**
    * Close a position
    */
   async closePosition(symbol: string, qty?: number, percentage?: number): Promise<Order> {
-    try {
-      const order = await this.client.closePosition(symbol, { qty, percentage });
-      return order as Order;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    const params: any = {};
+    if (qty) params.qty = qty;
+    if (percentage) params.percentage = percentage;
+    const queryParams = new URLSearchParams(params).toString();
+    const endpoint = `/v2/positions/${symbol}${queryParams ? `?${queryParams}` : ''}`;
+    return this.request<Order>('DELETE', endpoint);
   }
 
   /**
    * Close all positions
    */
   async closeAllPositions(cancelOrders: boolean = false): Promise<Order[]> {
-    try {
-      const orders = await this.client.closeAllPositions({ cancel_orders: cancelOrders });
-      return orders as Order[];
-    } catch (error) {
-      return this.handleError(error);
-    }
+    const endpoint = `/v2/positions?cancel_orders=${cancelOrders}`;
+    return this.request<Order[]>('DELETE', endpoint);
   }
 
   // ==================== ANALYSIS & UTILITIES ====================

@@ -16,23 +16,14 @@ export class AccountService extends AlpacaClient {
    * Get account information
    */
   async getAccount(): Promise<Account> {
-    try {
-      const account = await this.client.getAccount();
-      return account as Account;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<Account>('GET', '/v2/account');
   }
 
   /**
    * Get account configurations
    */
   async getAccountConfigurations(): Promise<any> {
-    try {
-      return await this.client.getAccountConfigurations();
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<any>('GET', '/v2/account/configurations');
   }
 
   /**
@@ -44,11 +35,7 @@ export class AccountService extends AlpacaClient {
     suspend_trade?: boolean;
     trade_confirm_email?: 'all' | 'none';
   }): Promise<any> {
-    try {
-      return await this.client.updateAccountConfigurations(config);
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.request<any>('PATCH', '/v2/account/configurations', config);
   }
 
   /**
@@ -60,12 +47,9 @@ export class AccountService extends AlpacaClient {
     date_end?: string;
     extended_hours?: boolean;
   }): Promise<PortfolioHistory> {
-    try {
-      const history = await this.client.getPortfolioHistory(params);
-      return history as PortfolioHistory;
-    } catch (error) {
-      return this.handleError(error);
-    }
+    const queryParams = new URLSearchParams(params as any).toString();
+    const endpoint = `/v2/account/portfolio/history${queryParams ? `?${queryParams}` : ''}`;
+    return this.request<PortfolioHistory>('GET', endpoint);
   }
 
   /**
@@ -80,23 +64,16 @@ export class AccountService extends AlpacaClient {
     page_size?: number;
     page_token?: string;
   }): Promise<Activity[]> {
-    try {
-      const activities = await this.client.getActivities(params);
-      return activities as Activity[];
-    } catch (error) {
-      return this.handleError(error);
-    }
+    const queryParams = new URLSearchParams(params as any).toString();
+    const endpoint = `/v2/account/activities${queryParams ? `?${queryParams}` : ''}`;
+    return this.request<Activity[]>('GET', endpoint);
   }
 
   /**
    * Get account activity by type
    */
   async getActivityByType(activityType: ActivityType): Promise<Activity[]> {
-    try {
-      return await this.getActivities({ activity_types: activityType });
-    } catch (error) {
-      return this.handleError(error);
-    }
+    return this.getActivities({ activity_types: activityType });
   }
 
   /**

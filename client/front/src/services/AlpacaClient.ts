@@ -1,14 +1,13 @@
 /**
  * Base Alpaca Client
  * Core client for making authenticated requests to Alpaca API
+ * Uses fetch API for browser compatibility (no Node.js dependencies)
  */
 
-import Alpaca from '@alpacahq/alpaca-trade-api';
 import { getAlpacaConfig, type AlpacaConfig } from './alpaca.config';
 import type { AlpacaError } from './alpaca.types';
 
 export class AlpacaClient {
-  protected client: Alpaca;
   protected config: AlpacaConfig;
 
   constructor(config?: Partial<AlpacaConfig>) {
@@ -17,21 +16,13 @@ export class AlpacaClient {
     if (!this.config.keyId || !this.config.secretKey) {
       throw new Error('Alpaca API credentials are required. Please set VITE_ALPACA_API_KEY and VITE_ALPACA_SECRET_KEY');
     }
-
-    this.client = new Alpaca({
-      keyId: this.config.keyId,
-      secretKey: this.config.secretKey,
-      paper: this.config.paper,
-      baseUrl: this.config.baseUrl,
-      dataBaseUrl: this.config.dataBaseUrl,
-    });
   }
 
   /**
-   * Get the underlying Alpaca client instance
+   * Get the current configuration
    */
-  getClient(): Alpaca {
-    return this.client;
+  getConfig(): AlpacaConfig {
+    return this.config;
   }
 
   /**
