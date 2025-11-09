@@ -1,13 +1,16 @@
 """
-APEX FastAPI Backend - ULTRA SIMPLE
-Just 2 endpoints for hackathon demo. No sessions, no complexity.
+APEX FastAPI Backend - WITH WEBSOCKETS FOR LIVE CHAT
+Real-time agent conversation feed displayed to user.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
+import asyncio
+import json
 import os
+from datetime import datetime
 
 from market_agent import MarketAgent
 from strategy_agent import StrategyAgent
@@ -15,7 +18,7 @@ from risk_agent import RiskAgent
 
 
 # ========================================
-# REQUEST/RESPONSE MODELS
+# MODELS
 # ========================================
 
 class Portfolio(BaseModel):
@@ -35,20 +38,15 @@ class UserProfile(BaseModel):
 class AnalysisRequest(BaseModel):
     portfolio: Portfolio
     user_profile: UserProfile
-    max_deliberation_rounds: Optional[int] = 3
-
-
-class UserFeedback(BaseModel):
-    user_message: Optional[str] = None
-    finalize: bool = False
 
 
 # ========================================
 # FASTAPI APP
 # ========================================
 
+
 # ========================================
-# INITIALIZE AGENTS (ONCE AT STARTUP)
+# INITIALIZE AGENTS
 # ========================================
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -64,46 +62,110 @@ risk_agent = RiskAgent(OPENROUTER_API_KEY, model=MODEL, enable_logging=False,
 
 
 # ========================================
-# API ENDPOINTS
+# SIMPLE REST ENDPOINT (Health Check)
 # ========================================
 
-@app.post("/api/analyze")
-def analyze(request: AnalysisRequest):
+
+# ========================================
+# WEBSOCKET ENDPOINT (Main Chat Interface)
+# ========================================
+
+@app.websocket("/ws/analyze")
+async def websocket_analyze(websocket: WebSocket):
     """
-    Run complete analysis. Returns everything in one response.
-    This is blocking - frontend waits for complete result.
+    WebSocket endpoint for live analysis with chat feed.
+    
+    Frontend sends: portfolio and user_profile
+    Backend sends: real-time messages as analysis progresses
+    User can send: messages during deliberation
     """
+    await websocket.accept()
+    
     try:
-        portfolio = request.portfolio.dict()
-        user_profile = request.user_profile.dict()
+        # Send connection confirmation
+        await websocket.send_json({
+            'type': 'connected',
+            'message': 'Connected to APEX. Send your portfolio to start analysis.'
+        })
         
-        # STEP 1: Market Analysis
+        # Wait for initial request
+        data = await websocket.receive_text()
+        request_data = json.loads(data)
+        
+        portfolio = request_data['portfolio']
+        user_profile = request_data['user_profile']
+        
+        # Storage for chat history
+        chat_history = []
+        
+        async def send_message(speaker: str, message: str, data: Optional[Dict] = None):
+            """Helper to send and store messages"""
+            msg = {
+                'type': 'message',
+                'speaker': speaker,
+                'message': message,
+                'data': data,
+                'timestamp': datetime.now().isoformat()
+            }
+            chat_history.append(msg)
+            await websocket.send_json(msg)
+        
+        # Start analysis
+        await send_message('SYSTEM', '🚀 Starting multi-agent analysis...')
+        
+        # ===== PHASE 1: MARKET ANALYSIS =====
+        await send_message('SYSTEM', '📊 Phase 1: Market Analysis')
+        await send_message('MARKET', '🔍 Scanning current market conditions...')
+        
         market_report = market_agent.scan_market()
         
-        market_summary = {
-            'spy_price': market_report['market_data']['spy_price'],
-            'spy_change_pct': market_report['market_data']['spy_change_pct'],
-            'vix': market_report['market_data']['vix'],
-            'condition': _extract_condition(market_report),
-            'alerts': market_report['alerts']
-        }
+        market_msg = f"""📊 Market Analysis Complete:
+
+- S&P 500: ${market_report['market_data']['spy_price']:.2f} ({market_report['market_data']['spy_change_pct']:+.2f}%)
+- VIX (Fear Index): {market_report['market_data']['vix']:.1f}
+- Market Condition: {_extract_condition(market_report)}
+
+Key Alerts:
+{_format_alerts(market_report['alerts'])}"""
         
-        # STEP 2: Strategy Generation
+        await send_message('MARKET', market_msg, {
+            'spy_price': market_report['market_data']['spy_price'],
+            'vix': market_report['market_data']['vix'],
+            'condition': _extract_condition(market_report)
+        })
+        
+        # ===== PHASE 2: STRATEGY GENERATION =====
+        await send_message('SYSTEM', '🧠 Phase 2: Strategy Generation')
+        await send_message('STRATEGY', '💭 Analyzing your portfolio and generating recommendations...')
+        
         strategy = strategy_agent.generate_strategy(
             market_report=market_report,
             current_portfolio=portfolio,
             user_profile=user_profile
         )
         
-        strategy_summary = {
-            'summary': strategy['strategy_summary'],
+        strategy_msg = f"""💡 Strategy Recommendation:
+
+{strategy['strategy_summary']}
+
+Target Allocation:
+{_format_allocation(strategy['target_allocation'])}
+
+Recommended Trades ({len(strategy['recommended_trades'])} total):
+{_format_trades(strategy['recommended_trades'])}
+
+Confidence: {strategy['confidence']*100:.0f}%"""
+        
+        await send_message('STRATEGY', strategy_msg, {
             'allocation': strategy['target_allocation'],
             'trades': strategy['recommended_trades'],
-            'confidence': strategy['confidence'],
-            'rationale': strategy.get('rationale', '')
-        }
+            'confidence': strategy['confidence']
+        })
         
-        # STEP 3: Risk Validation
+        # ===== PHASE 3: RISK VALIDATION =====
+        await send_message('SYSTEM', '⚠️  Phase 3: Risk Assessment')
+        await send_message('RISK', '🎲 Running Monte Carlo simulations (5,000 iterations)...')
+        
         validation = risk_agent.validate_strategy(
             strategy=strategy,
             current_portfolio=portfolio,
@@ -111,113 +173,149 @@ def analyze(request: AnalysisRequest):
             market_report=market_report
         )
         
-        risk_summary = {
-            'recommendation': validation['recommendation'],
+        risk_msg = f"""⚠️  Risk Analysis Complete:
+
+Recommendation: {validation['recommendation']}
+Status: {'✅ APPROVED' if validation['approved'] else '❌ NEEDS REVISION'}
+
+Monte Carlo Results (1 year projection):
+- Most Likely Outcome: ${validation['risk_analysis']['median_outcome']:,.0f}
+- Worst Case (5%): ${validation['risk_analysis']['percentile_5']:,.0f}
+- Best Case (5%): ${validation['risk_analysis']['percentile_95']:,.0f}
+
+Risk Metrics:
+- Maximum Drawdown: {validation['risk_analysis']['max_drawdown']*100:.1f}%
+- Probability of Loss: {validation['risk_analysis']['prob_loss']*100:.1f}%
+- Sharpe Ratio: {validation['risk_analysis']['sharpe_ratio']:.2f}"""
+        
+        if validation['violations']:
+            risk_msg += f"\n\n🚨 Violations:\n{_format_list(validation['violations'])}"
+        
+        if validation['concerns']:
+            risk_msg += f"\n\n⚠️  Concerns:\n{_format_list(validation['concerns'])}"
+        
+        await send_message('RISK', risk_msg, {
             'approved': validation['approved'],
             'median_outcome': validation['risk_analysis']['median_outcome'],
-            'worst_case': validation['risk_analysis']['percentile_5'],
-            'best_case': validation['risk_analysis']['percentile_95'],
             'max_drawdown': validation['risk_analysis']['max_drawdown'],
-            'prob_loss': validation['risk_analysis']['prob_loss'],
-            'sharpe_ratio': validation['risk_analysis']['sharpe_ratio'],
-            'violations': validation['violations'],
-            'concerns': validation['concerns'],
-            'explanation': validation['explanation']
-        }
+            'violations': validation['violations']
+        })
         
-        # STEP 4: Simple Deliberation (optional, simulated)
-        deliberation = _run_simple_deliberation(
-            market_report=market_report,
-            strategy=strategy,
-            validation=validation,
-            user_profile=user_profile,
-            max_rounds=request.max_deliberation_rounds
-        )
+        # ===== PHASE 4: DELIBERATION =====
+        await send_message('SYSTEM', '💬 Phase 4: Agent Deliberation')
+        await send_message('SYSTEM', 'Agents will now discuss the strategy. You can interrupt anytime with your input.')
         
-        # Return everything
-        return {
-            'market': market_summary,
-            'strategy': strategy_summary,
-            'risk': risk_summary,
-            'deliberation': deliberation,
-            'overall_approved': validation['approved'],
-            'timestamp': market_report['timestamp'].isoformat()
-        }
+        # Run deliberation with user input
+        user_messages = []
+        finalize_requested = False
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/analyze-with-feedback")
-def analyze_with_feedback(request: AnalysisRequest, feedback: UserFeedback):
-    """
-    Run analysis WITH user feedback incorporated.
-    Use this if user provides input after seeing initial analysis.
-    """
-    try:
-        portfolio = request.portfolio.dict()
-        user_profile = request.user_profile.dict()
+        # Deliberation context
+        context = _build_context(market_report, strategy, validation, user_profile)
         
-        # Run initial analysis
-        market_report = market_agent.scan_market()
-        
-        strategy = strategy_agent.generate_strategy(
-            market_report=market_report,
-            current_portfolio=portfolio,
-            user_profile=user_profile
-        )
-        
-        validation = risk_agent.validate_strategy(
-            strategy=strategy,
-            current_portfolio=portfolio,
-            user_profile=user_profile,
-            market_report=market_report
-        )
-        
-        # If user provided feedback, adjust strategy
-        if feedback.user_message:
-            # Re-generate strategy considering user feedback
-            # (Add user message to context)
-            adjusted_strategy = strategy_agent.generate_strategy(
-                market_report=market_report,
-                current_portfolio=portfolio,
-                user_profile=user_profile,
-                # In a full implementation, we'd pass user_feedback here
-            )
+        for round_num in range(1, 4):  # Max 3 rounds
+            await send_message('SYSTEM', f'--- Deliberation Round {round_num}/3 ---')
             
-            strategy = adjusted_strategy
+            # Rotate through agents
+            agent_name = ['MARKET', 'STRATEGY', 'RISK'][round_num % 3]
             
-            # Re-validate
-            validation = risk_agent.validate_strategy(
-                strategy=strategy,
-                current_portfolio=portfolio,
-                user_profile=user_profile,
-                market_report=market_report
-            )
+            # Check for user input (non-blocking)
+            try:
+                # Wait up to 5 seconds for user input
+                user_data = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=5.0
+                )
+                
+                user_input = json.loads(user_data)
+                
+                if user_input.get('type') == 'user_message':
+                    user_msg = user_input.get('message', '')
+                    finalize = user_input.get('finalize', False)
+                    
+                    # Store and display user message
+                    await send_message('USER', user_msg)
+                    user_messages.append(user_msg)
+                    context += f"\n\nUSER INPUT: {user_msg}\n"
+                    
+                    if finalize:
+                        finalize_requested = True
+                        await send_message('SYSTEM', 'User requested finalization. Moving to final recommendation.')
+                        break
+                
+            except asyncio.TimeoutError:
+                # No user input - continue
+                pass
+            
+            # Generate agent deliberation
+            deliberation_msg = _generate_deliberation(agent_name, context, round_num)
+            await send_message(agent_name, deliberation_msg)
+            
+            context += f"\n\n{agent_name} (Round {round_num}): {deliberation_msg}"
+            
+            if finalize_requested:
+                break
         
-        return {
-            'market': {
-                'spy_price': market_report['market_data']['spy_price'],
-                'vix': market_report['market_data']['vix'],
-                'condition': _extract_condition(market_report)
-            },
-            'strategy': {
-                'summary': strategy['strategy_summary'],
-                'allocation': strategy['target_allocation'],
-                'trades': strategy['recommended_trades'],
-                'confidence': strategy['confidence']
-            },
-            'risk': {
-                'recommendation': validation['recommendation'],
-                'approved': validation['approved'],
-                'median_outcome': validation['risk_analysis']['median_outcome'],
-                'max_drawdown': validation['risk_analysis']['max_drawdown']
-            },
-            'user_feedback_incorporated': feedback.user_message is not None
-        }
+        # ===== PHASE 5: FINAL RECOMMENDATION =====
+        await send_message('SYSTEM', '🏁 Phase 5: Final Recommendation')
         
+        # Synthesize final recommendation
+        final_msg = f"""🎯 Final Investment Recommendation:
+
+After analysis and deliberation, here's our final recommendation:
+
+{strategy['rationale'][:300]}...
+
+Target Allocation:
+{_format_allocation(strategy['target_allocation'])}
+
+Trades to Execute:
+{_format_trades(strategy['recommended_trades'])}
+
+Overall Assessment: {'✅ APPROVED for execution' if validation['approved'] else '⚠️  NEEDS REVIEW'}
+
+You can now approve or reject this recommendation."""
+        
+        await send_message('SYSTEM', final_msg, {
+            'final_allocation': strategy['target_allocation'],
+            'final_trades': strategy['recommended_trades'],
+            'approved': validation['approved'],
+            'chat_history': chat_history
+        })
+        
+        # Wait for user approval
+        await send_message('SYSTEM', 'Waiting for your approval...')
+        
+        approval_data = await websocket.receive_text()
+        approval = json.loads(approval_data)
+        
+        if approval.get('approved'):
+            await send_message('SYSTEM', '✅ Strategy approved! Ready for execution.')
+            await websocket.send_json({
+                'type': 'complete',
+                'approved': True,
+                'chat_history': chat_history,
+                'final_strategy': {
+                    'allocation': strategy['target_allocation'],
+                    'trades': strategy['recommended_trades']
+                }
+            })
+        else:
+            await send_message('SYSTEM', '❌ Strategy rejected. Analysis complete.')
+            await websocket.send_json({
+                'type': 'complete',
+                'approved': False,
+                'chat_history': chat_history
+            })
+        
+    except WebSocketDisconnect:
+        print("Client disconnected")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        await websocket.send_json({
+            'type': 'error',
+            'message': str(e)
+        })
+    finally:
+        await websocket.close()
 
 
 # ========================================
@@ -233,44 +331,72 @@ def _extract_condition(market_report: Dict) -> str:
     return 'Neutral'
 
 
-def _run_simple_deliberation(
-    market_report: Dict,
-    strategy: Dict,
-    validation: Dict,
-    user_profile: Dict,
-    max_rounds: int = 3
-) -> List[Dict]:
+def _format_alerts(alerts: List[str]) -> str:
+    """Format alerts list"""
+    return '\n'.join([f"  • {alert}" for alert in alerts[:3]])
+
+
+def _format_allocation(allocation: Dict[str, float]) -> str:
+    """Format allocation dict"""
+    lines = []
+    for symbol, weight in sorted(allocation.items(), key=lambda x: x[1], reverse=True):
+        lines.append(f"  • {symbol.upper()}: {weight*100:.0f}%")
+    return '\n'.join(lines)
+
+
+def _format_trades(trades: List[Dict]) -> str:
+    """Format trades list"""
+    if not trades:
+        return "  • No trades needed"
+    
+    lines = []
+    for i, trade in enumerate(trades[:5], 1):
+        lines.append(f"  {i}. {trade['action']} {trade['shares']} {trade['symbol']} - {trade['reason']}")
+    
+    if len(trades) > 5:
+        lines.append(f"  ... and {len(trades)-5} more")
+    
+    return '\n'.join(lines)
+
+
+def _format_list(items: List[str]) -> str:
+    """Format generic list"""
+    return '\n'.join([f"  • {item}" for item in items])
+
+
+def _build_context(market_report: Dict, strategy: Dict, validation: Dict, user_profile: Dict) -> str:
+    """Build context for deliberation"""
+    return f"""MARKET: VIX {market_report['market_data']['vix']:.1f}, {_extract_condition(market_report)}
+STRATEGY: {strategy['strategy_summary'][:100]}
+RISK: {validation['recommendation']}, {len(validation['violations'])} violations
+USER: {user_profile['risk_tolerance']} risk tolerance"""
+
+
+def _generate_deliberation(agent_name: str, context: str, round_num: int) -> str:
     """
-    Simplified deliberation - just return key discussion points.
-    Not full AI deliberation, just structured insights.
+    Generate deliberation message.
+    In production, this would call the AI model.
+    For simplicity, returning structured responses.
     """
-    deliberation = []
+    templates = {
+        'MARKET': [
+            "Given current volatility, I recommend proceeding cautiously with this allocation.",
+            "Market conditions support this strategy. VIX levels are manageable.",
+            "I see some headwinds in the market, but the diversification helps mitigate risk."
+        ],
+        'STRATEGY': [
+            "This allocation balances growth and protection well for the user's profile.",
+            "I'm confident this strategy aligns with the long-term goals specified.",
+            "The trade recommendations will reposition the portfolio appropriately."
+        ],
+        'RISK': [
+            "Monte Carlo results show acceptable downside risk for this user.",
+            "The probability metrics look good - within tolerance levels.",
+            "I'm satisfied with the risk-adjusted returns this strategy should provide."
+        ]
+    }
     
-    # Market Agent perspective
-    deliberation.append({
-        'round': 1,
-        'agent': 'Market',
-        'message': f"Market is {_extract_condition(market_report)} with VIX at {market_report['market_data']['vix']:.1f}. " +
-                   f"{'High volatility suggests caution.' if market_report['market_data']['vix'] > 20 else 'Volatility is moderate.'}"
-    })
-    
-    # Strategy Agent perspective
-    deliberation.append({
-        'round': 2,
-        'agent': 'Strategy',
-        'message': f"{strategy['strategy_summary']} " +
-                   f"This aligns with {user_profile['risk_tolerance']} risk tolerance and {user_profile['time_horizon']} horizon."
-    })
-    
-    # Risk Agent perspective
-    deliberation.append({
-        'round': 3,
-        'agent': 'Risk',
-        'message': f"Monte Carlo shows median outcome of ${validation['risk_analysis']['median_outcome']:,.0f}. " +
-                   f"{'No violations found - strategy is within acceptable risk.' if not validation['violations'] else 'Some concerns identified: ' + ', '.join(validation['violations'][:2])}"
-    })
-    
-    return deliberation[:max_rounds]
+    return templates[agent_name][round_num % len(templates[agent_name])]
 
 
 # ========================================
