@@ -22,7 +22,6 @@ from core.agent_network import AgentNetwork
 from services.voice import VoiceService
 from engines.crash_simulator import CrashScenario, simulate_crash
 from engines.crash_scenario_engine import CrashScenarioEngine
-from services.personal_finance import PersonalFinanceService
 from services.news_search import aggregate_news, web_search
 from services.mock_plaid import mock_plaid_data
 from services.news_aggregator import news_aggregator
@@ -34,6 +33,7 @@ from services.finance_adapter import FinanceAdapter
 from services.logging_service import logger as structured_logger, RequestLogger
 from middleware.exception_handler import setup_exception_handlers
 from api.auth import get_current_user, login_user, refresh_access_token, logout_user
+from services.historical_data import HistoricalDataLoader
 
 
 # Initialize logging
@@ -113,15 +113,15 @@ app.add_middleware(
 # Global orchestrator instance
 orchestrator: Optional[Orchestrator] = None
 orchestrator_task: Optional[asyncio.Task] = None
-voice_service: Optional[VoiceService] = None
-finance_service: Optional[PersonalFinanceService] = None
+voice_service: Optional[Any] = None
+finance_service: Optional[Any] = None
 crash_engine: Optional[CrashScenarioEngine] = None
 crash_simulation_task: Optional[asyncio.Task] = None
-alpaca_broker: Optional[AlpacaBroker] = None
-war_room: Optional[WarRoomInterface] = None
-chroma_service: Optional[ChromaService] = None
-rag_engine: Optional[RAGQueryEngine] = None
-finance_adapter: Optional[FinanceAdapter] = None
+alpaca_broker: Optional[Any] = None
+war_room: Optional[Any] = None
+chroma_service: Optional[Any] = None
+rag_engine: Optional[Any] = None
+finance_adapter: Optional[Any] = None
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -232,8 +232,20 @@ async def startup_event():
 
         asyncio.create_task(redis_to_websocket_relay())
 
-        voice_service = VoiceService()
-        finance_service = PersonalFinanceService()
+        # Lazy import voice and personal finance services to avoid hard dependency during demo
+        try:
+            from services.voice import VoiceService as _VoiceService
+            voice_service = _VoiceService()
+        except Exception as ve:
+            logger.warning(f"Voice service unavailable: {ve}")
+
+        try:
+            from services.personal_finance import PersonalFinanceService as _PersonalFinanceService
+            finance_service = _PersonalFinanceService()
+        except Exception as fe:
+            logger.warning(f"Personal finance service unavailable: {fe}")
+            finance_service = None
+
         await finance_service.ensure_indexes()
         
         alpaca_broker = AlpacaBroker(paper=True)
@@ -246,7 +258,8 @@ async def startup_event():
 
     except Exception as e:
         logger.error(f"❌ Failed to initialize server: {e}")
-        raise
+        # Do not crash the server during demo; continue with limited functionality
+        return
 
 
 @app.on_event("shutdown")

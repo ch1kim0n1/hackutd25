@@ -9,6 +9,11 @@ from datetime import datetime
 from openai import OpenAI
 import time
 from services.agent_debate_engine import AgentDebateEngine, AgentStance
+from core.agent_network import AgentNetwork
+from core.types import OrchestratorState
+
+# Re-export for legacy imports from server.py
+__all__ = ["AgentOrchestrator", "Orchestrator", "OrchestratorState"]
 
 
 class AgentOrchestrator:
@@ -1068,4 +1073,76 @@ Be concise and actionable."""
             return AgentStance.AGREE, confidence
         else:
             return AgentStance.DISAGREE, confidence
+
+
+# -----------------------------------------------------------------------------
+# Minimal compatibility wrapper expected by server.py
+# -----------------------------------------------------------------------------
+class Orchestrator:
+    """
+    Minimal orchestrator wrapper to satisfy the FastAPI server interface.
+    Exposes: initialize(), start(), stop(), pause(), resume(), get_status(),
+    .network, .is_running, .config
+    """
+
+    def __init__(self, redis_url: str = "redis://localhost:6379"):
+        self.network = AgentNetwork()
+        self.is_running: bool = False
+        self.is_paused: bool = False
+        self._state: OrchestratorState = OrchestratorState.IDLE
+        self.config: Dict[str, Any] = {}
+        self._error_count: int = 0
+        self._decision_count: int = 0
+
+    async def initialize(self):
+        await self.network.initialize()
+        self._state = OrchestratorState.INITIALIZING
+        # Transition to idle once initialized
+        self._state = OrchestratorState.IDLE
+
+    def get_status(self) -> Dict[str, Any]:
+        return {
+            "state": self._state.value if hasattr(self._state, "value") else str(self._state),
+            "is_paused": self.is_paused,
+            "is_running": self.is_running,
+            "error_count": self._error_count,
+            "decision_count": self._decision_count,
+        }
+
+    async def start(self):
+        if self.is_running:
+            return
+        self.is_running = True
+        self._state = OrchestratorState.ANALYSIS
+        # Emit a bootstrap message for demo visibility
+        await self.network.publish("agent_communication", {
+            "type": "system",
+            "from": "system",
+            "to": "all",
+            "message": "Orchestrator started. Agents assembling.",
+            "timestamp": datetime.now().isoformat()
+        })
+
+    async def stop(self):
+        if not self.is_running:
+            return
+        self.is_running = False
+        self._state = OrchestratorState.STOPPED
+        await self.network.publish("agent_communication", {
+            "type": "system",
+            "from": "system",
+            "to": "all",
+            "message": "Orchestrator stopped.",
+            "timestamp": datetime.now().isoformat()
+        })
+
+    async def pause(self):
+        self.is_paused = True
+        self._state = OrchestratorState.PAUSED
+        await self.network.pause_agents("User requested pause")
+
+    async def resume(self):
+        self.is_paused = False
+        self._state = OrchestratorState.ANALYSIS
+        await self.network.resume_agents("Resuming after pause")
 
