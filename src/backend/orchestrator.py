@@ -8,8 +8,28 @@ from typing import Dict, List, Optional, Callable
 from datetime import datetime
 import time
 
+try:
+    from output_refinement_pipeline import RefinementPipeline
+    REFINEMENT_AVAILABLE = True
+except ImportError:
+    REFINEMENT_AVAILABLE = False
+    print("⚠️  Output Refinement Pipeline not available")
 
-class AgentOrchestrator:
+
+class OrchestratorState(Enum):
+    """State machine states for orchestrator workflow"""
+    IDLE = "idle"
+    SCANNING = "scanning"
+    STRATEGIZING = "strategizing"
+    RISK_CHECK = "risk_check"
+    EXECUTING = "executing"
+    EXPLAINING = "explaining"
+    WAITING_USER = "waiting_user"
+    PAUSED = "paused"
+    ERROR = "error"
+
+
+class Orchestrator:
     """
     Orchestrates multi-agent conversations for APEX investment system.
     
@@ -26,59 +46,322 @@ class AgentOrchestrator:
     
     User can interrupt at any point to provide input or override.
     """
-    
-    def __init__(
-        self,
-        market_agent,
-        strategy_agent,
-        risk_agent,
-        max_rounds: int = 3,
-        enable_logging: bool = True,
-        require_user_approval: bool = True,
-        auto_approve_threshold: float = 0.85
-    ):
-        """
-        Initialize orchestrator with agents.
-        
-        Args:
-            market_agent: Instance of MarketAgent
-            strategy_agent: Instance of StrategyAgent
-            risk_agent: Instance of RiskAgent
-            max_rounds: Maximum conversation rounds before forcing decision
-            enable_logging: Print conversation flow
-            require_user_approval: If True, wait for user approval before executing
-            auto_approve_threshold: Auto-approve if all agents have confidence > this
-        """
-        self.market_agent = market_agent
-        self.strategy_agent = strategy_agent
-        self.risk_agent = risk_agent
-        
-        self.max_rounds = max_rounds
-        self.logging_enabled = enable_logging
-        self.require_user_approval = require_user_approval
-        self.auto_approve_threshold = auto_approve_threshold
-        
-        # Conversation history
-        self.conversation_history = []
-        
-        # User interrupt flag
-        self.user_interrupted = False
-        self.user_input = None
-        
-        self.log("🎭 Orchestrator initialized with 3 agents")
-        self.log(f"⚙️  Max rounds: {max_rounds}")
-        self.log(f"👤 Require user approval: {require_user_approval}")
-    
-    def log(self, message: str, agent: str = "ORCHESTRATOR"):
-        """Print status message if logging enabled"""
-        if self.logging_enabled:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            emoji_map = {
-                "ORCHESTRATOR": "🎭",
-                "MARKET": "🔍",
-                "STRATEGY": "🧠",
-                "RISK": "⚠️",
-                "USER": "👤"
+
+    def __init__(self, redis_url: str = "redis://localhost:6379"):
+        self.logger = logging.getLogger(__name__)
+        self.redis_url = redis_url
+
+        # Agent network for communication
+        self.network = AgentNetwork(redis_url=redis_url)
+
+        # Initialize all agents
+        self.agents = {
+            "market": MarketAgent(agent_network=self.network),
+            "strategy": StrategyAgent(agent_network=self.network),
+            "risk": RiskAgent(agent_network=self.network),
+            "executor": ExecutorAgent(agent_network=self.network),
+            "explainer": ExplainerAgent(agent_network=self.network),
+            "user": None  # Will be initialized after UserAgent is created
+        }
+
+        # State management
+        self.state = OrchestratorState.IDLE
+        self.is_paused = False
+        self.is_running = False
+
+        # Decision tracking
+        self.current_decision = {
+            "market_report": None,
+            "strategy": None,
+            "risk_assessment": None,
+            "execution_result": None,
+            "explanation": None,
+            "user_input": None
+        }
+        self.decision_history: List[Dict[str, Any]] = []
+
+        # Configuration
+        self.config = {
+            "scan_interval": 300,  # 5 minutes
+            "max_retries": 3,
+            "user_timeout": 60,  # seconds to wait for user input
+            "enable_auto_execute": False,  # Require user approval for trades
+            "refinement": {
+                "enabled": REFINEMENT_AVAILABLE,
+                "explanation_level": "beginner",  # beginner/intermediate/advanced
+                "max_terms_per_output": 10,
+                "format": "terminal"  # terminal/web/both
+            }
+        }
+
+        # Error tracking
+        self.error_count = 0
+        self.max_errors = 10
+
+        # Output Refinement Pipeline
+        self.refinement_pipeline = None
+
+    async def initialize(self):
+        """Initialize the orchestrator and all agents"""
+        self.logger.info("🚀 Initializing APEX Orchestrator...")
+
+        try:
+            # Initialize agent network
+            await self.network.initialize()
+            self.logger.info("✓ Agent network initialized")
+
+            # Subscribe to key channels
+            await self._subscribe_to_channels()
+            self.logger.info("✓ Subscribed to agent channels")
+
+            # Initialize User Agent (when available)
+            try:
+                self.agents["user"] = UserAgent(agent_network=self.network)
+                self.logger.info("✓ User Agent initialized")
+            except Exception as e:
+                self.logger.warning(f"⚠ User Agent not available: {e}")
+
+            # Initialize Output Refinement Pipeline
+            if REFINEMENT_AVAILABLE and self.config["refinement"]["enabled"]:
+                try:
+                    self.refinement_pipeline = RefinementPipeline(
+                        explanation_level=self.config["refinement"]["explanation_level"],
+                        max_terms=self.config["refinement"]["max_terms_per_output"]
+                    )
+                    self.logger.info("✓ Output Refinement Pipeline initialized")
+                    stats = self.refinement_pipeline.get_stats()
+                    self.logger.info(f"   Glossary terms: {stats['glossary_terms']}")
+                    self.logger.info(f"   Explanation level: {stats['explanation_level']}")
+                except Exception as e:
+                    self.logger.warning(f"⚠ Refinement Pipeline failed: {e}")
+                    self.refinement_pipeline = None
+
+            self.state = OrchestratorState.IDLE
+            self.logger.info("✅ Orchestrator ready")
+
+        except Exception as e:
+            self.logger.error(f"❌ Failed to initialize orchestrator: {e}")
+            self.state = OrchestratorState.ERROR
+            raise
+
+    async def _subscribe_to_channels(self):
+        """Subscribe orchestrator to relevant agent channels"""
+        channels = [
+            "market_update",
+            "strategy.updated",
+            "risk_assessment",
+            "trade_executed",
+            "trade_explanation",
+            "user_input",
+            "agent_pause",
+            "agent_resume"
+        ]
+
+        for channel in channels:
+            # Note: actual subscription handled by agent network
+            self.logger.debug(f"Monitoring channel: {channel}")
+
+    async def start(self):
+        """Start the main orchestrator loop"""
+        if self.is_running:
+            self.logger.warning("Orchestrator already running")
+            return
+
+        self.is_running = True
+        self.logger.info("🎬 Starting orchestrator main loop")
+
+        # Start background message listener
+        asyncio.create_task(self._message_listener())
+
+        # Start main decision loop
+        while self.is_running:
+            try:
+                if self.is_paused:
+                    await asyncio.sleep(1)
+                    continue
+
+                if self.state == OrchestratorState.IDLE:
+                    await self._execute_decision_cycle()
+                    await asyncio.sleep(self.config["scan_interval"])
+
+                elif self.state == OrchestratorState.ERROR:
+                    self.logger.error("Orchestrator in error state, attempting recovery...")
+                    await asyncio.sleep(30)
+                    self.state = OrchestratorState.IDLE
+                    self.error_count = 0
+
+                else:
+                    # State machine is progressing, check periodically
+                    await asyncio.sleep(1)
+
+            except Exception as e:
+                self.logger.error(f"Error in main loop: {e}")
+                self.error_count += 1
+
+                if self.error_count >= self.max_errors:
+                    self.logger.critical("Max errors reached, stopping orchestrator")
+                    self.state = OrchestratorState.ERROR
+                    self.is_running = False
+                else:
+                    await asyncio.sleep(5)
+
+    async def _execute_decision_cycle(self):
+        """Execute one complete decision cycle through all agents"""
+        cycle_start = datetime.now()
+        self.logger.info("=" * 60)
+        self.logger.info("📊 Starting new decision cycle")
+
+        try:
+            # Reset current decision
+            self.current_decision = {k: None for k in self.current_decision.keys()}
+
+            # Step 1: Market Scanning
+            await self._transition_state(OrchestratorState.SCANNING)
+            market_report = await self._run_market_scan()
+            if not market_report:
+                self.logger.warning("Market scan failed, aborting cycle")
+                await self._transition_state(OrchestratorState.IDLE)
+                return
+
+            self.current_decision["market_report"] = market_report
+            await self.network.broadcast_agent_communication(
+                from_agent="market",
+                to_agent="strategy",
+                message=f"Market scan complete. VIX: {market_report.get('vix_level', 'N/A')}, "
+                        f"Alerts: {len(market_report.get('alerts', []))}"
+            )
+
+            # Step 2: Strategy Generation
+            await self._transition_state(OrchestratorState.STRATEGIZING)
+            strategy = await self._run_strategy_generation(market_report)
+            if not strategy:
+                self.logger.warning("Strategy generation failed, aborting cycle")
+                await self._transition_state(OrchestratorState.IDLE)
+                return
+
+            self.current_decision["strategy"] = strategy
+            await self.network.broadcast_agent_communication(
+                from_agent="strategy",
+                to_agent="risk",
+                message=f"Proposed {len(strategy.get('recommendations', []))} trades. "
+                        f"Allocation adjustments: {strategy.get('target_allocation', {})}"
+            )
+
+            # Step 3: Risk Assessment
+            await self._transition_state(OrchestratorState.RISK_CHECK)
+            risk_assessment = await self._run_risk_check(strategy)
+            if not risk_assessment:
+                self.logger.warning("Risk assessment failed, aborting cycle")
+                await self._transition_state(OrchestratorState.IDLE)
+                return
+
+            self.current_decision["risk_assessment"] = risk_assessment
+
+            # Check if risk agent approved the strategy
+            if risk_assessment.get("approval") != "approved":
+                self.logger.warning(f"❌ Strategy rejected by Risk Agent: {risk_assessment.get('reason')}")
+                await self.network.broadcast_agent_communication(
+                    from_agent="risk",
+                    to_agent="all",
+                    message=f"⚠️ Strategy REJECTED: {risk_assessment.get('reason', 'High risk detected')}"
+                )
+
+                # Save rejected decision to history
+                self._save_decision_to_history(status="rejected", reason=risk_assessment.get('reason'))
+                await self._transition_state(OrchestratorState.IDLE)
+                return
+
+            await self.network.broadcast_agent_communication(
+                from_agent="risk",
+                to_agent="executor",
+                message=f"✅ Strategy approved. Risk score: {risk_assessment.get('risk_score', 0):.2f}. "
+                        f"Proceeding to execution."
+            )
+
+            # Step 4: Wait for User Approval (if configured)
+            if not self.config["enable_auto_execute"]:
+                await self._transition_state(OrchestratorState.WAITING_USER)
+                self.logger.info("⏸ Waiting for user approval to execute trades...")
+
+                await self.network.broadcast_agent_communication(
+                    from_agent="system",
+                    to_agent="user",
+                    message="🤚 Strategy ready for execution. Please review and approve, or provide feedback."
+                )
+
+                # Wait for user input with timeout
+                user_approved = await self._wait_for_user_approval()
+
+                if not user_approved:
+                    self.logger.info("User did not approve, skipping execution")
+                    self._save_decision_to_history(status="user_rejected")
+                    await self._transition_state(OrchestratorState.IDLE)
+                    return
+
+            # Step 5: Execute Trades
+            await self._transition_state(OrchestratorState.EXECUTING)
+            execution_result = await self._run_trade_execution(strategy)
+            if not execution_result:
+                self.logger.warning("Trade execution failed")
+                await self._transition_state(OrchestratorState.IDLE)
+                return
+
+            self.current_decision["execution_result"] = execution_result
+            await self.network.broadcast_agent_communication(
+                from_agent="executor",
+                to_agent="explainer",
+                message=f"Executed {len(execution_result.get('trades', []))} trades. "
+                        f"Total value: ${execution_result.get('total_value', 0):,.2f}"
+            )
+
+            # Step 6: Explain to User
+            await self._transition_state(OrchestratorState.EXPLAINING)
+            explanation = await self._run_explanation(execution_result)
+            self.current_decision["explanation"] = explanation
+
+            # Use refined output if available, otherwise use original
+            if explanation.get("refined"):
+                display_message = explanation["refined"]["terminal"]
+            else:
+                display_message = f"📝 {explanation.get('summary', 'Trades executed successfully.')}"
+
+            await self.network.broadcast_agent_communication(
+                from_agent="explainer",
+                to_agent="user",
+                message=display_message
+            )
+
+            # Save successful decision to history
+            cycle_duration = (datetime.now() - cycle_start).total_seconds()
+            self._save_decision_to_history(status="completed", duration=cycle_duration)
+
+            self.logger.info(f"✅ Decision cycle completed in {cycle_duration:.1f}s")
+            await self._transition_state(OrchestratorState.IDLE)
+
+        except Exception as e:
+            self.logger.error(f"Error in decision cycle: {e}", exc_info=True)
+            self.error_count += 1
+            await self._transition_state(OrchestratorState.ERROR)
+
+    async def _run_market_scan(self) -> Optional[Dict[str, Any]]:
+        """Run market scanning agent"""
+        try:
+            self.logger.info("🔍 Running market scan...")
+            report = await self.agents["market"].scan_market()
+            return report
+        except Exception as e:
+            self.logger.error(f"Market scan failed: {e}")
+            return None
+
+    async def _run_strategy_generation(self, market_report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Run strategy generation agent"""
+        try:
+            self.logger.info("🧠 Generating strategy...")
+
+            # Get current portfolio (would come from database/broker)
+            current_portfolio = {
+                "cash": 10000,
+                "positions": {}
             }
             emoji = emoji_map.get(agent, "💬")
             print(f"[{timestamp}] {emoji} {agent}: {message}")
@@ -239,117 +522,44 @@ class AgentOrchestrator:
                 final_validation,
                 user_input_callback
             )
-        elif consensus_reached:
-            # Auto-approve if consensus and high confidence
-            high_confidence = (
-                final_strategy['confidence'] >= self.auto_approve_threshold and
-                final_validation['confidence'] >= self.auto_approve_threshold
-            )
-            user_approved = high_confidence
-            
-            if user_approved:
-                self.log(f"✅ Auto-approved (confidence > {self.auto_approve_threshold*100:.0f}%)")
-        
-        # Build final result
-        result = {
-            'final_strategy': final_strategy,
-            'final_validation': final_validation,
-            'approved': validation['approved'] and user_approved,
-            'conversation_rounds': self.conversation_history,
-            'consensus_reached': consensus_reached,
-            'rounds_taken': round_num,
-            'user_approved': user_approved,
-            'market_context': market_report,
-            'timestamp': datetime.now()
-        }
-        
-        self.log(f"\nFinal Status: {'✅ APPROVED' if result['approved'] else '❌ NOT APPROVED'}")
-        self.log(f"Rounds: {result['rounds_taken']}/{self.max_rounds}")
-        self.log(f"Consensus: {'✅ YES' if consensus_reached else '❌ NO'}")
-        self.log(f"User Approved: {'✅ YES' if user_approved else '❌ NO'}")
-        
-        return result
-    
-    # ========================================
-    # CONVERSATION MANAGEMENT
-    # ========================================
-    
-    def _record_agent_output(
-        self,
-        agent_name: str,
-        round_num: int,
-        output: Dict,
-        output_type: str
-    ):
-        """Record agent contribution to conversation history"""
-        self.conversation_history.append({
-            'agent': agent_name,
-            'round': round_num,
-            'type': output_type,
-            'output': output,
-            'timestamp': datetime.now()
-        })
-    
-    def _get_previous_risk_feedback(self) -> Optional[Dict]:
-        """Get feedback from Risk Agent in previous round"""
-        # Look backwards through history for most recent risk validation
-        for entry in reversed(self.conversation_history):
-            if entry['agent'] == 'RISK' and entry['type'] == 'risk_validation':
-                validation = entry['output']
-                
-                if not validation['approved']:
-                    return {
-                        'violations': validation['violations'],
-                        'concerns': validation['concerns'],
-                        'suggested_modifications': validation['suggested_modifications']
-                    }
-        
-        return None
-    
-    def _extract_market_condition(self, market_report: Dict) -> str:
-        """Extract market condition from report"""
-        analysis = market_report.get('analysis', '')
-        
-        for condition in ['Bullish', 'Bearish', 'Volatile', 'Mixed', 'Neutral']:
-            if condition in analysis:
-                return condition
-        
-        return 'Unknown'
-    
-    # ========================================
-    # USER INTERACTION
-    # ========================================
-    
-    def _check_user_interrupt(
-        self,
-        user_input_callback: Callable,
-        round_num: int
-    ) -> bool:
-        """
-        Check if user wants to interrupt and provide input.
-        
-        Args:
-            user_input_callback: Function that returns {'interrupted': bool, 'message': str}
-            round_num: Current round number
-        
-        Returns:
-            True if user interrupted, False otherwise
-        """
-        if not user_input_callback:
-            return False
-        
-        # Call user input callback (non-blocking)
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Trade execution failed: {e}")
+            return None
+
+    async def _run_explanation(self, execution_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Run explainer agent with output refinement"""
         try:
-            user_response = user_input_callback(round_num)
-            
-            if user_response and user_response.get('interrupted', False):
-                self.user_interrupted = True
-                self.user_input = user_response.get('message', '')
-                
-                self.log(f"👤 USER INTERRUPTED", agent="USER")
-                self.log(f"Message: {self.user_input}", agent="USER")
-                
-                return True
+            self.logger.info("💬 Generating explanation...")
+
+            explanation = await self.agents["explainer"].explain_trades(
+                execution_result=execution_result
+            )
+
+            # Apply output refinement if enabled
+            if self.refinement_pipeline and explanation.get("summary"):
+                self.logger.info("✨ Refining output...")
+
+                refined = self.refinement_pipeline.refine(
+                    text=explanation["summary"],
+                    format=self.config["refinement"]["format"]
+                )
+
+                # Add refined versions to explanation
+                explanation["refined"] = {
+                    "terminal": refined.terminal_output,
+                    "web_html": refined.web_html,
+                    "web_json": refined.web_json,
+                    "markdown": refined.markdown,
+                    "detected_terms": refined.detected_terms,
+                    "definitions": refined.definitions
+                }
+
+                self.logger.info(f"   Detected {len(refined.detected_terms)} terms")
+                self.logger.info(f"   Provided {len(refined.definitions)} definitions")
+
+            return explanation
         except Exception as e:
             self.log(f"Error checking user input: {e}")
         
