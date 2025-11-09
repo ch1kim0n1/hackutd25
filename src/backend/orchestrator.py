@@ -687,6 +687,8 @@ Be concise and actionable."""
           Dict of {symbol: weight} - revised target allocation
       """
       original_allocation = original_strategy['target_allocation']
+
+      user_constraints = self._extract_user_constraints_from_deliberation()
       
       prompt = f"""Based on the agent deliberation, determine the FINAL allocation.
 
@@ -704,6 +706,13 @@ Be concise and actionable."""
   USER PROFILE:
   - Risk Tolerance: {user_profile.get('risk_tolerance', 'moderate')}
   - Time Horizon: {user_profile.get('time_horizon', 'long-term')}
+  """
+
+      if user_constraints:
+          prompt += f"""
+USER CONSTRAINTS (MUST FOLLOW):
+{self._format_user_constraints(user_constraints)}"""
+      prompt += """
 
   TASK: Provide the FINAL allocation incorporating insights from deliberation.
 
@@ -919,3 +928,91 @@ Be concise and actionable."""
                 self.log(f"   • {change}", "DELIBERATION")
         else:
             self.log("📊 No allocation changes - original confirmed", "DELIBERATION")
+
+    def _extract_user_constraints_from_deliberation(self) -> List[Dict]:
+        """
+        NEW METHOD: Extract user-specified constraints from deliberation history.
+        
+        Returns:
+            List of constraints like:
+            [
+                {'type': 'keep_position', 'symbol': 'AAPL', 'min_weight': 0.10},
+                {'type': 'avoid_asset', 'symbol': 'TSLA'},
+                {'type': 'max_bonds', 'value': 0.30}
+            ]
+        """
+        constraints = []
+        
+        # Find user messages in deliberation
+        user_messages = [
+            turn['message'] 
+            for turn in self.deliberation_history 
+            if turn['speaker'] == 'USER'
+        ]
+        
+        if not user_messages:
+            return constraints
+        
+        # Simple keyword matching for common constraints
+        for message in user_messages:
+            msg_lower = message.lower()
+            
+            # "Keep [symbol]" patterns
+            if 'keep' in msg_lower and 'apple' in msg_lower:
+                constraints.append({
+                    'type': 'keep_position',
+                    'symbol': 'AAPL',
+                    'description': 'User wants to keep Apple stock'
+                })
+            elif 'keep' in msg_lower and 'spy' in msg_lower:
+                constraints.append({
+                    'type': 'keep_position',
+                    'symbol': 'SPY',
+                    'description': 'User wants to keep S&P 500 position'
+                })
+            
+            # "No bonds" or "avoid bonds"
+            if any(word in msg_lower for word in ['no bonds', 'avoid bonds', "don't want bonds"]):
+                constraints.append({
+                    'type': 'avoid_asset_class',
+                    'class': 'bonds',
+                    'description': 'User wants to avoid bonds'
+                })
+            
+            # "More aggressive" or "more risk"
+            if any(word in msg_lower for word in ['more aggressive', 'more risk', 'higher returns']):
+                constraints.append({
+                    'type': 'preference',
+                    'preference': 'aggressive',
+                    'description': 'User prefers more aggressive allocation'
+                })
+            
+            # "More conservative" or "less risk"
+            if any(word in msg_lower for word in ['more conservative', 'less risk', 'safer', 'protect']):
+                constraints.append({
+                    'type': 'preference',
+                    'preference': 'conservative',
+                    'description': 'User prefers more conservative allocation'
+                })
+        
+        return constraints
+
+
+    def _format_user_constraints(self, constraints: List[Dict]) -> str:
+        """Format constraints for prompt"""
+        if not constraints:
+            return "None"
+        
+        lines = []
+        for i, constraint in enumerate(constraints, 1):
+            if constraint['type'] == 'keep_position':
+                lines.append(f"{i}. MUST keep {constraint['symbol']} in portfolio - do NOT reduce or remove")
+            elif constraint['type'] == 'avoid_asset_class':
+                lines.append(f"{i}. AVOID {constraint['class']} - allocate 0% to bond ETFs")
+            elif constraint['type'] == 'preference':
+                if constraint['preference'] == 'aggressive':
+                    lines.append(f"{i}. User wants MORE aggressive (higher stock allocation)")
+                else:
+                    lines.append(f"{i}. User wants MORE conservative (higher bond/cash allocation)")
+        
+        return "\n".join(lines)
