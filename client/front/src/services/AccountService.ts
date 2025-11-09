@@ -3,53 +3,55 @@
  * Manages account information, portfolio, and account activities
  */
 
-import { AlpacaClient } from './AlpacaClient';
-import type { 
-  Account, 
-  PortfolioHistory, 
-  Activity, 
-  ActivityType 
-} from './alpaca.types';
+import type {
+  Account,
+  PortfolioHistory,
+  Activity,
+  ActivityType,
+} from "./alpaca.types";
+
+import { AlpacaClient } from "./AlpacaClient";
 
 export class AccountService extends AlpacaClient {
   /**
    * Get account information
    */
   async getAccount(): Promise<Account> {
-    return this.request<Account>('GET', '/v2/account');
+    return this.request<Account>("GET", "/v2/account");
   }
 
   /**
    * Get account configurations
    */
   async getAccountConfigurations(): Promise<any> {
-    return this.request<any>('GET', '/v2/account/configurations');
+    return this.request<any>("GET", "/v2/account/configurations");
   }
 
   /**
    * Update account configurations
    */
   async updateAccountConfigurations(config: {
-    dtbp_check?: 'entry' | 'exit' | 'both';
+    dtbp_check?: "entry" | "exit" | "both";
     no_shorting?: boolean;
     suspend_trade?: boolean;
-    trade_confirm_email?: 'all' | 'none';
+    trade_confirm_email?: "all" | "none";
   }): Promise<any> {
-    return this.request<any>('PATCH', '/v2/account/configurations', config);
+    return this.request<any>("PATCH", "/v2/account/configurations", config);
   }
 
   /**
    * Get portfolio history
    */
   async getPortfolioHistory(params?: {
-    period?: '1D' | '1W' | '1M' | '3M' | '1A' | 'all';
-    timeframe?: '1Min' | '5Min' | '15Min' | '1H' | '1D';
+    period?: "1D" | "1W" | "1M" | "3M" | "1A" | "all";
+    timeframe?: "1Min" | "5Min" | "15Min" | "1H" | "1D";
     date_end?: string;
     extended_hours?: boolean;
   }): Promise<PortfolioHistory> {
     const queryParams = new URLSearchParams(params as any).toString();
-    const endpoint = `/v2/account/portfolio/history${queryParams ? `?${queryParams}` : ''}`;
-    return this.request<PortfolioHistory>('GET', endpoint);
+    const endpoint = `/v2/account/portfolio/history${queryParams ? `?${queryParams}` : ""}`;
+
+    return this.request<PortfolioHistory>("GET", endpoint);
   }
 
   /**
@@ -60,13 +62,14 @@ export class AccountService extends AlpacaClient {
     date?: string;
     until?: string;
     after?: string;
-    direction?: 'asc' | 'desc';
+    direction?: "asc" | "desc";
     page_size?: number;
     page_token?: string;
   }): Promise<Activity[]> {
     const queryParams = new URLSearchParams(params as any).toString();
-    const endpoint = `/v2/account/activities${queryParams ? `?${queryParams}` : ''}`;
-    return this.request<Activity[]>('GET', endpoint);
+    const endpoint = `/v2/account/activities${queryParams ? `?${queryParams}` : ""}`;
+
+    return this.request<Activity[]>("GET", endpoint);
   }
 
   /**
@@ -94,7 +97,8 @@ export class AccountService extends AlpacaClient {
       const portfolioValue = parseFloat(account.portfolio_value);
       const lastEquity = parseFloat(account.last_equity);
       const profitLoss = portfolioValue - lastEquity;
-      const profitLossPercent = lastEquity > 0 ? (profitLoss / lastEquity) * 100 : 0;
+      const profitLossPercent =
+        lastEquity > 0 ? (profitLoss / lastEquity) * 100 : 0;
 
       return {
         totalValue: portfolioValue,
@@ -123,15 +127,15 @@ export class AccountService extends AlpacaClient {
       const reasons: string[] = [];
 
       if (account.trading_blocked) {
-        reasons.push('Trading is blocked on this account');
+        reasons.push("Trading is blocked on this account");
       }
       if (account.account_blocked) {
-        reasons.push('Account is blocked');
+        reasons.push("Account is blocked");
       }
       if (account.trade_suspended_by_user) {
-        reasons.push('Trading is suspended by user');
+        reasons.push("Trading is suspended by user");
       }
-      if (account.status !== 'ACTIVE') {
+      if (account.status !== "ACTIVE") {
         reasons.push(`Account status is ${account.status}`);
       }
 
@@ -147,7 +151,10 @@ export class AccountService extends AlpacaClient {
   /**
    * Get account buying power for a specific asset
    */
-  async getBuyingPowerForSymbol(symbol: string, price: number): Promise<{
+  async getBuyingPowerForSymbol(
+    symbol: string,
+    price: number,
+  ): Promise<{
     maxShares: number;
     maxNotional: number;
     buyingPower: number;

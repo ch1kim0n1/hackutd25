@@ -4,18 +4,19 @@
  * Browser-compatible version using fetch API
  */
 
-import { AlpacaClient } from './AlpacaClient';
-import type { Bar, Quote, Trade, Snapshot, News } from './alpaca.types';
+import type { Bar, Quote, Trade, Snapshot, News } from "./alpaca.types";
+
+import { AlpacaClient } from "./AlpacaClient";
 
 export class MarketDataService extends AlpacaClient {
   private get dataBaseUrl(): string {
-    return this.config.dataBaseUrl || 'https://data.alpaca.markets';
+    return this.config.dataBaseUrl || "https://data.alpaca.markets";
   }
 
   private get headers() {
     return {
-      'APCA-API-KEY-ID': this.config.keyId,
-      'APCA-API-SECRET-KEY': this.config.secretKey,
+      "APCA-API-KEY-ID": this.config.keyId,
+      "APCA-API-SECRET-KEY": this.config.secretKey,
     };
   }
 
@@ -29,31 +30,57 @@ export class MarketDataService extends AlpacaClient {
     params: {
       start?: string | Date;
       end?: string | Date;
-      timeframe?: '1Min' | '5Min' | '15Min' | '30Min' | '1Hour' | '1Day' | '1Week' | '1Month';
+      timeframe?:
+        | "1Min"
+        | "5Min"
+        | "15Min"
+        | "30Min"
+        | "1Hour"
+        | "1Day"
+        | "1Week"
+        | "1Month";
       limit?: number;
-      adjustment?: 'raw' | 'split' | 'dividend' | 'all';
-      feed?: 'iex' | 'sip';
-    }
+      adjustment?: "raw" | "split" | "dividend" | "all";
+      feed?: "iex" | "sip";
+    },
   ): Promise<Bar[]> {
     const queryParams = new URLSearchParams({
-      ...(params.start && { start: typeof params.start === 'string' ? params.start : params.start.toISOString() }),
-      ...(params.end && { end: typeof params.end === 'string' ? params.end : params.end.toISOString() }),
-      timeframe: params.timeframe || '1Day',
+      ...(params.start && {
+        start:
+          typeof params.start === "string"
+            ? params.start
+            : params.start.toISOString(),
+      }),
+      ...(params.end && {
+        end:
+          typeof params.end === "string"
+            ? params.end
+            : params.end.toISOString(),
+      }),
+      timeframe: params.timeframe || "1Day",
       ...(params.limit && { limit: params.limit.toString() }),
       ...(params.adjustment && { adjustment: params.adjustment }),
       ...(params.feed && { feed: params.feed }),
     }).toString();
 
-    const response = await fetch(`${this.dataBaseUrl}/v2/stocks/${symbol}/bars?${queryParams}`, {
-      headers: this.headers,
-    });
+    const response = await fetch(
+      `${this.dataBaseUrl}/v2/stocks/${symbol}/bars?${queryParams}`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data.bars || [];
   }
 
@@ -65,14 +92,22 @@ export class MarketDataService extends AlpacaClient {
     params: {
       start?: string | Date;
       end?: string | Date;
-      timeframe?: '1Min' | '5Min' | '15Min' | '30Min' | '1Hour' | '1Day' | '1Week' | '1Month';
+      timeframe?:
+        | "1Min"
+        | "5Min"
+        | "15Min"
+        | "30Min"
+        | "1Hour"
+        | "1Day"
+        | "1Week"
+        | "1Month";
       limit?: number;
-      adjustment?: 'raw' | 'split' | 'dividend' | 'all';
-      feed?: 'iex' | 'sip';
-    }
+      adjustment?: "raw" | "split" | "dividend" | "all";
+      feed?: "iex" | "sip";
+    },
   ): Promise<Record<string, Bar[]>> {
     const result: Record<string, Bar[]> = {};
-    
+
     // Fetch bars for each symbol in parallel
     await Promise.all(
       symbols.map(async (symbol) => {
@@ -81,7 +116,7 @@ export class MarketDataService extends AlpacaClient {
         } catch (error) {
           result[symbol] = [];
         }
-      })
+      }),
     );
 
     return result;
@@ -91,16 +126,24 @@ export class MarketDataService extends AlpacaClient {
    * Get latest bar for a symbol
    */
   async getLatestBar(symbol: string): Promise<Bar> {
-    const response = await fetch(`${this.dataBaseUrl}/v2/stocks/${symbol}/bars/latest`, {
-      headers: this.headers,
-    });
+    const response = await fetch(
+      `${this.dataBaseUrl}/v2/stocks/${symbol}/bars/latest`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data.bar;
   }
 
@@ -110,16 +153,24 @@ export class MarketDataService extends AlpacaClient {
    * Get latest quote for a symbol
    */
   async getLatestQuote(symbol: string): Promise<Quote> {
-    const response = await fetch(`${this.dataBaseUrl}/v2/stocks/${symbol}/quotes/latest`, {
-      headers: this.headers,
-    });
+    const response = await fetch(
+      `${this.dataBaseUrl}/v2/stocks/${symbol}/quotes/latest`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data.quote;
   }
 
@@ -127,17 +178,25 @@ export class MarketDataService extends AlpacaClient {
    * Get quotes for multiple symbols
    */
   async getLatestQuotes(symbols: string[]): Promise<Record<string, Quote>> {
-    const symbolsParam = symbols.join(',');
-    const response = await fetch(`${this.dataBaseUrl}/v2/stocks/quotes/latest?symbols=${symbolsParam}`, {
-      headers: this.headers,
-    });
+    const symbolsParam = symbols.join(",");
+    const response = await fetch(
+      `${this.dataBaseUrl}/v2/stocks/quotes/latest?symbols=${symbolsParam}`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data.quotes || {};
   }
 
@@ -147,16 +206,24 @@ export class MarketDataService extends AlpacaClient {
    * Get latest trade for a symbol
    */
   async getLatestTrade(symbol: string): Promise<Trade> {
-    const response = await fetch(`${this.dataBaseUrl}/v2/stocks/${symbol}/trades/latest`, {
-      headers: this.headers,
-    });
+    const response = await fetch(
+      `${this.dataBaseUrl}/v2/stocks/${symbol}/trades/latest`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data.trade;
   }
 
@@ -164,17 +231,25 @@ export class MarketDataService extends AlpacaClient {
    * Get trades for multiple symbols
    */
   async getLatestTrades(symbols: string[]): Promise<Record<string, Trade>> {
-    const symbolsParam = symbols.join(',');
-    const response = await fetch(`${this.dataBaseUrl}/v2/stocks/trades/latest?symbols=${symbolsParam}`, {
-      headers: this.headers,
-    });
+    const symbolsParam = symbols.join(",");
+    const response = await fetch(
+      `${this.dataBaseUrl}/v2/stocks/trades/latest?symbols=${symbolsParam}`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data.trades || {};
   }
 
@@ -184,16 +259,24 @@ export class MarketDataService extends AlpacaClient {
    * Get snapshot for a symbol (comprehensive current data)
    */
   async getSnapshot(symbol: string): Promise<Snapshot> {
-    const response = await fetch(`${this.dataBaseUrl}/v2/stocks/${symbol}/snapshot`, {
-      headers: this.headers,
-    });
+    const response = await fetch(
+      `${this.dataBaseUrl}/v2/stocks/${symbol}/snapshot`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data;
   }
 
@@ -201,17 +284,25 @@ export class MarketDataService extends AlpacaClient {
    * Get snapshots for multiple symbols
    */
   async getSnapshots(symbols: string[]): Promise<Record<string, Snapshot>> {
-    const symbolsParam = symbols.join(',');
-    const response = await fetch(`${this.dataBaseUrl}/v2/stocks/snapshots?symbols=${symbolsParam}`, {
-      headers: this.headers,
-    });
+    const symbolsParam = symbols.join(",");
+    const response = await fetch(
+      `${this.dataBaseUrl}/v2/stocks/snapshots?symbols=${symbolsParam}`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data || {};
   }
 
@@ -225,28 +316,48 @@ export class MarketDataService extends AlpacaClient {
     start?: string | Date;
     end?: string | Date;
     limit?: number;
-    sort?: 'asc' | 'desc';
+    sort?: "asc" | "desc";
   }): Promise<News[]> {
     const queryParams = new URLSearchParams({
       ...(params?.symbols && {
-        symbols: Array.isArray(params.symbols) ? params.symbols.join(',') : params.symbols
+        symbols: Array.isArray(params.symbols)
+          ? params.symbols.join(",")
+          : params.symbols,
       }),
-      ...(params?.start && { start: typeof params.start === 'string' ? params.start : params.start.toISOString() }),
-      ...(params?.end && { end: typeof params.end === 'string' ? params.end : params.end.toISOString() }),
+      ...(params?.start && {
+        start:
+          typeof params.start === "string"
+            ? params.start
+            : params.start.toISOString(),
+      }),
+      ...(params?.end && {
+        end:
+          typeof params.end === "string"
+            ? params.end
+            : params.end.toISOString(),
+      }),
       ...(params?.limit && { limit: params.limit.toString() }),
       ...(params?.sort && { sort: params.sort }),
     }).toString();
 
-    const response = await fetch(`${this.dataBaseUrl}/v1beta1/news?${queryParams}`, {
-      headers: this.headers,
-    });
+    const response = await fetch(
+      `${this.dataBaseUrl}/v1beta1/news?${queryParams}`,
+      {
+        headers: this.headers,
+      },
+    );
 
     if (!response.ok) {
       const error = await response.json();
-      throw this.handleError({ response: { status: response.status, data: error }, message: error.message });
+
+      throw this.handleError({
+        response: { status: response.status, data: error },
+        message: error.message,
+      });
     }
 
     const data = await response.json();
+
     return data.news || [];
   }
 
@@ -257,6 +368,7 @@ export class MarketDataService extends AlpacaClient {
    */
   async getCurrentPrice(symbol: string): Promise<number> {
     const trade = await this.getLatestTrade(symbol);
+
     return trade.p;
   }
 
@@ -266,11 +378,11 @@ export class MarketDataService extends AlpacaClient {
   async getCurrentPrices(symbols: string[]): Promise<Record<string, number>> {
     const trades = await this.getLatestTrades(symbols);
     const prices: Record<string, number> = {};
-    
+
     for (const [symbol, trade] of Object.entries(trades)) {
       prices[symbol] = trade.p;
     }
-    
+
     return prices;
   }
 
@@ -309,7 +421,7 @@ export class MarketDataService extends AlpacaClient {
     volume: number;
   }> {
     const snapshot = await this.getSnapshot(symbol);
-    
+
     return {
       symbol,
       currentPrice: snapshot.latestTrade?.p || 0,
@@ -333,7 +445,8 @@ export class MarketDataService extends AlpacaClient {
     const currentPrice = snapshot.latestTrade?.p || 0;
     const previousClose = snapshot.prevDailyBar?.c || 0;
     const change = currentPrice - previousClose;
-    const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0;
+    const changePercent =
+      previousClose > 0 ? (change / previousClose) * 100 : 0;
 
     return {
       currentPrice,
@@ -353,6 +466,7 @@ export class MarketDataService extends AlpacaClient {
       const quoteTime = new Date(quote.t).getTime();
       const now = Date.now();
       const fiveMinutes = 5 * 60 * 1000;
+
       return now - quoteTime < fiveMinutes;
     } catch (error) {
       return false;
@@ -362,7 +476,10 @@ export class MarketDataService extends AlpacaClient {
   /**
    * Get market movers
    */
-  async getMarketMovers(symbols: string[], count: number = 10): Promise<{
+  async getMarketMovers(
+    symbols: string[],
+    count: number = 10,
+  ): Promise<{
     topGainers: Array<{ symbol: string; changePercent: number; price: number }>;
     topLosers: Array<{ symbol: string; changePercent: number; price: number }>;
   }> {
@@ -370,28 +487,36 @@ export class MarketDataService extends AlpacaClient {
       symbols.map(async (symbol) => {
         try {
           const change = await this.getPriceChange(symbol);
+
           return { symbol, ...change };
         } catch (error) {
           return null;
         }
-      })
+      }),
     );
 
-    const validChanges = changes.filter((c): c is NonNullable<typeof c> => c !== null);
-    
-    const sorted = [...validChanges].sort((a, b) => b.changePercent - a.changePercent);
-    
+    const validChanges = changes.filter(
+      (c): c is NonNullable<typeof c> => c !== null,
+    );
+
+    const sorted = [...validChanges].sort(
+      (a, b) => b.changePercent - a.changePercent,
+    );
+
     return {
-      topGainers: sorted.slice(0, count).map(c => ({
+      topGainers: sorted.slice(0, count).map((c) => ({
         symbol: c.symbol,
         changePercent: c.changePercent,
         price: c.currentPrice,
       })),
-      topLosers: sorted.slice(-count).reverse().map(c => ({
-        symbol: c.symbol,
-        changePercent: c.changePercent,
-        price: c.currentPrice,
-      })),
+      topLosers: sorted
+        .slice(-count)
+        .reverse()
+        .map((c) => ({
+          symbol: c.symbol,
+          changePercent: c.changePercent,
+          price: c.currentPrice,
+        })),
     };
   }
 }

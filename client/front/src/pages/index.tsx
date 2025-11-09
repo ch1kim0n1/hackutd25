@@ -1,12 +1,14 @@
+import type { Position, Account } from "@/services/alpaca.types";
+
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
 import { Chip } from "@heroui/chip";
+
 import { BalanceChart } from "@/components/BalanceChart";
 import { Asset } from "@/types";
 import { AlpacaService } from "@/services";
-import type { Position, Account } from "@/services/alpaca.types";
 
 interface PortfolioAsset extends Asset {
   shares: number;
@@ -22,7 +24,9 @@ export const IndexPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [portfolioAssets, setPortfolioAssets] = useState<PortfolioAsset[]>([]);
   const [account, setAccount] = useState<Account | null>(null);
-  const [balanceData, setBalanceData] = useState<{ date: Date; balance: number }[]>([]);
+  const [balanceData, setBalanceData] = useState<
+    { date: Date; balance: number }[]
+  >([]);
 
   // Initialize Alpaca service
   const alpaca = new AlpacaService();
@@ -41,8 +45,8 @@ export const IndexPage = () => {
         alpaca.account.getAccount(),
         alpaca.trading.getPositions(),
         alpaca.account.getPortfolioHistory({
-          period: '1M',
-          timeframe: '1D',
+          period: "1M",
+          timeframe: "1D",
         }),
       ]);
 
@@ -60,8 +64,12 @@ export const IndexPage = () => {
 
           // Get price change for the day
           let dailyChange = 0;
+
           try {
-            const priceChange = await alpaca.marketData.getPriceChange(position.symbol);
+            const priceChange = await alpaca.marketData.getPriceChange(
+              position.symbol,
+            );
+
             dailyChange = priceChange.changePercent;
           } catch (err) {
             console.warn(`Could not fetch price change for ${position.symbol}`);
@@ -78,22 +86,25 @@ export const IndexPage = () => {
             profitLoss: unrealizedPL,
             profitLossPercent: unrealizedPLPC,
           } as PortfolioAsset;
-        })
+        }),
       );
 
       setPortfolioAssets(assets);
 
       // Convert portfolio history to balance data
       if (portfolioHistory.equity && portfolioHistory.timestamp) {
-        const chartData = portfolioHistory.timestamp.map((timestamp, index) => ({
-          date: new Date(timestamp * 1000),
-          balance: portfolioHistory.equity[index],
-        }));
+        const chartData = portfolioHistory.timestamp.map(
+          (timestamp, index) => ({
+            date: new Date(timestamp * 1000),
+            balance: portfolioHistory.equity[index],
+          }),
+        );
+
         setBalanceData(chartData);
       }
     } catch (err: any) {
-      console.error('Error loading portfolio data:', err);
-      setError(err.message || 'Failed to load portfolio data');
+      console.error("Error loading portfolio data:", err);
+      setError(err.message || "Failed to load portfolio data");
     } finally {
       setLoading(false);
     }
@@ -103,16 +114,20 @@ export const IndexPage = () => {
   const totalValue = account ? parseFloat(account.portfolio_value) : 0;
   const totalInvested = portfolioAssets.reduce(
     (sum, asset) => sum + asset.shares * asset.purchasePrice,
-    0
+    0,
   );
-  const totalProfitLoss = account ? parseFloat(account.equity) - parseFloat(account.last_equity) : 0;
-  const totalProfitLossPercent = totalInvested > 0 ? (totalProfitLoss / totalInvested) * 100 : 0;
-  const todayChange = account 
+  const totalProfitLoss = account
     ? parseFloat(account.equity) - parseFloat(account.last_equity)
     : 0;
-  const todayChangePercent = account && parseFloat(account.last_equity) > 0
-    ? (todayChange / parseFloat(account.last_equity)) * 100
+  const totalProfitLossPercent =
+    totalInvested > 0 ? (totalProfitLoss / totalInvested) * 100 : 0;
+  const todayChange = account
+    ? parseFloat(account.equity) - parseFloat(account.last_equity)
     : 0;
+  const todayChangePercent =
+    account && parseFloat(account.last_equity) > 0
+      ? (todayChange / parseFloat(account.last_equity)) * 100
+      : 0;
 
   const handleAssetClick = (asset: PortfolioAsset) => {
     navigate(`/asset/${asset.symbol}`);
@@ -128,6 +143,7 @@ export const IndexPage = () => {
 
   const formatPercent = (value: number) => {
     const sign = value >= 0 ? "+" : "";
+
     return `${sign}${value.toFixed(2)}%`;
   };
 
@@ -139,7 +155,9 @@ export const IndexPage = () => {
           <CardBody className="p-12 text-center">
             <div className="flex flex-col items-center gap-4">
               <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-              <p className="text-lg text-default-500">Loading portfolio data...</p>
+              <p className="text-lg text-default-500">
+                Loading portfolio data...
+              </p>
             </div>
           </CardBody>
         </Card>
@@ -155,7 +173,9 @@ export const IndexPage = () => {
           <CardBody className="p-8 text-center">
             <div className="flex flex-col items-center gap-4">
               <div className="text-danger text-4xl">⚠️</div>
-              <h3 className="text-xl font-bold text-danger">Error Loading Portfolio</h3>
+              <h3 className="text-xl font-bold text-danger">
+                Error Loading Portfolio
+              </h3>
               <p className="text-default-500">{error}</p>
               <Button color="primary" onPress={loadPortfolioData}>
                 Retry
@@ -171,12 +191,14 @@ export const IndexPage = () => {
     <div className="container mx-auto px-4 py-6 space-y-6">
       {/* Header with Refresh Button */}
       <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-foreground">Portfolio Dashboard</h1>
+        <h1 className="text-3xl font-bold text-foreground">
+          Portfolio Dashboard
+        </h1>
         <Button
           color="default"
+          isDisabled={loading}
           variant="flat"
           onPress={loadPortfolioData}
-          isDisabled={loading}
         >
           {loading ? "Refreshing..." : "Refresh Data"}
         </Button>
@@ -186,13 +208,17 @@ export const IndexPage = () => {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="shadow-lg">
           <CardBody className="p-6">
-            <p className="text-sm text-default-500 mb-1">Total Portfolio Value</p>
-            <h2 className="text-3xl font-bold text-foreground">{formatCurrency(totalValue)}</h2>
+            <p className="text-sm text-default-500 mb-1">
+              Total Portfolio Value
+            </p>
+            <h2 className="text-3xl font-bold text-foreground">
+              {formatCurrency(totalValue)}
+            </h2>
             <div className="flex items-center gap-2 mt-2">
               <Chip
+                color={todayChange >= 0 ? "success" : "danger"}
                 size="sm"
                 variant="flat"
-                color={todayChange >= 0 ? "success" : "danger"}
               >
                 {formatCurrency(todayChange)}
               </Chip>
@@ -230,10 +256,10 @@ export const IndexPage = () => {
               {formatCurrency(totalProfitLoss)}
             </h2>
             <Chip
+              className="mt-2"
+              color={totalProfitLoss >= 0 ? "success" : "danger"}
               size="sm"
               variant="flat"
-              color={totalProfitLoss >= 0 ? "success" : "danger"}
-              className="mt-2"
             >
               {formatPercent(totalProfitLossPercent)}
             </Chip>
@@ -243,18 +269,18 @@ export const IndexPage = () => {
         <Card className="shadow-lg">
           <CardBody className="p-6 flex flex-col gap-2">
             <Button
+              className="w-full font-semibold"
               color="primary"
               size="lg"
-              className="w-full font-semibold"
               onPress={() => navigate("/market")}
             >
               Go to Market
             </Button>
             <Button
-              color="secondary"
-              variant="flat"
-              size="lg"
               className="w-full font-semibold"
+              color="secondary"
+              size="lg"
+              variant="flat"
               onPress={() => console.log("Analyze Portfolio clicked")}
             >
               Analyze Portfolio
@@ -276,7 +302,9 @@ export const IndexPage = () => {
         <CardBody className="p-0">
           {/* Table Header */}
           <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-divider bg-default-50">
-            <div className="col-span-3 text-sm font-semibold text-default-700">Asset</div>
+            <div className="col-span-3 text-sm font-semibold text-default-700">
+              Asset
+            </div>
             <div className="col-span-2 text-sm font-semibold text-default-700 text-right">
               Price
             </div>
@@ -301,18 +329,20 @@ export const IndexPage = () => {
               {/* Asset Info */}
               <div className="col-span-3 flex flex-col">
                 <div className="flex items-center gap-2">
-                  <Chip size="sm" color="primary" variant="flat">
+                  <Chip color="primary" size="sm" variant="flat">
                     {asset.symbol}
                   </Chip>
                   <Chip
+                    color={asset.dailyChange >= 0 ? "success" : "danger"}
                     size="sm"
                     variant="flat"
-                    color={asset.dailyChange >= 0 ? "success" : "danger"}
                   >
                     {formatPercent(asset.dailyChange)}
                   </Chip>
                 </div>
-                <span className="text-sm text-default-500 mt-1">{asset.name}</span>
+                <span className="text-sm text-default-500 mt-1">
+                  {asset.name}
+                </span>
               </div>
 
               {/* Current Price */}
@@ -324,7 +354,9 @@ export const IndexPage = () => {
 
               {/* Shares */}
               <div className="col-span-2 flex items-center justify-end">
-                <span className="text-base text-foreground">{asset.shares}</span>
+                <span className="text-base text-foreground">
+                  {asset.shares}
+                </span>
               </div>
 
               {/* Total Value */}
@@ -344,10 +376,10 @@ export const IndexPage = () => {
                   {formatCurrency(asset.profitLoss)}
                 </span>
                 <Chip
+                  className="mt-1"
+                  color={asset.profitLoss >= 0 ? "success" : "danger"}
                   size="sm"
                   variant="flat"
-                  color={asset.profitLoss >= 0 ? "success" : "danger"}
-                  className="mt-1"
                 >
                   {formatPercent(asset.profitLossPercent)}
                 </Chip>
@@ -358,11 +390,17 @@ export const IndexPage = () => {
           {/* Empty State */}
           {portfolioAssets.length === 0 && (
             <div className="py-12 text-center">
-              <p className="text-xl text-default-400 mb-2">No assets in your portfolio yet</p>
+              <p className="text-xl text-default-400 mb-2">
+                No assets in your portfolio yet
+              </p>
               <p className="text-sm text-default-500 mb-6">
                 Start investing to see your portfolio here
               </p>
-              <Button color="primary" size="lg" onPress={() => navigate("/market")}>
+              <Button
+                color="primary"
+                size="lg"
+                onPress={() => navigate("/market")}
+              >
                 Go to Market
               </Button>
             </div>

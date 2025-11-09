@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^2.0.64",
     "@heroui/button": "2.2.27",
     "@heroui/card": "^2.2.25",
     "@heroui/chip": "^2.2.22",

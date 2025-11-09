@@ -7,21 +7,21 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tsconfigPaths(), tailwindcss()],
   define: {
-    'process.env': {},
-    'global': 'globalThis',
+    "process.env": {},
+    global: "globalThis",
   },
   resolve: {
     alias: {
       // Add polyfills if needed
-      process: 'process/browser',
-      buffer: 'buffer',
+      process: "process/browser",
+      buffer: "buffer",
     },
   },
   optimizeDeps: {
     esbuildOptions: {
       define: {
-        global: 'globalThis'
-      }
-    }
-  }
+        global: "globalThis",
+      },
+    },
+  },
 });

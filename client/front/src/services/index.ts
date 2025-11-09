@@ -1,35 +1,43 @@
 /**
  * Alpaca Services Index
  * Main export file for all Alpaca trading services
- * 
+ *
  * @example
  * ```typescript
  * // Use the unified service
  * import { AlpacaService } from '@/services';
  * const alpaca = new AlpacaService();
- * 
+ *
  * // Or use individual services
  * import { TradingService, MarketDataService } from '@/services';
- * 
+ *
  * // Or use React hooks
  * import { useDashboard, useStockPrice } from '@/services/hooks';
  * ```
  */
 
 // Core Client
-export { AlpacaClient } from './AlpacaClient';
+export { AlpacaClient } from "./AlpacaClient";
 
 // Services
-export { AccountService } from './AccountService';
-export { TradingService } from './TradingService';
-export { AssetService } from './AssetService';
-export { MarketDataService } from './MarketDataService';
-export { WatchlistService } from './WatchlistService';
-export { ClockService } from './ClockService';
+export { AccountService } from "./AccountService";
+export { TradingService } from "./TradingService";
+export { AssetService } from "./AssetService";
+export { MarketDataService } from "./MarketDataService";
+export { WatchlistService } from "./WatchlistService";
+export { ClockService } from "./ClockService";
+
+// AI Service
+export { AIService, aiService } from "./AIService";
+export type {
+  PortfolioAnalysisRequest,
+  AssetAnalysisRequest,
+  AIAnalysisResponse,
+} from "./AIService";
 
 // Configuration
-export { getAlpacaConfig, ALPACA_URLS } from './alpaca.config';
-export type { AlpacaConfig } from './alpaca.config';
+export { getAlpacaConfig, ALPACA_URLS } from "./alpaca.config";
+export type { AlpacaConfig } from "./alpaca.config";
 
 // Types
 export type {
@@ -55,22 +63,30 @@ export type {
   Activity,
   ActivityType,
   AlpacaError,
-} from './alpaca.types';
+} from "./alpaca.types";
 
 // Utilities
-export { AlpacaUtils } from './utils';
-export * from './utils';
+export { AlpacaUtils } from "./utils";
+export * from "./utils";
 
 // ==================== UNIFIED ALPACA SERVICE ====================
 
-import { AccountService } from './AccountService';
-import { TradingService } from './TradingService';
-import { AssetService } from './AssetService';
-import { MarketDataService } from './MarketDataService';
-import { WatchlistService } from './WatchlistService';
-import { ClockService } from './ClockService';
-import type { AlpacaConfig } from './alpaca.config';
-import type { Account, Position, Order, Asset, Snapshot, News } from './alpaca.types';
+import type { AlpacaConfig } from "./alpaca.config";
+import type {
+  Account,
+  Position,
+  Order,
+  Asset,
+  Snapshot,
+  News,
+} from "./alpaca.types";
+
+import { AccountService } from "./AccountService";
+import { TradingService } from "./TradingService";
+import { AssetService } from "./AssetService";
+import { MarketDataService } from "./MarketDataService";
+import { WatchlistService } from "./WatchlistService";
+import { ClockService } from "./ClockService";
 
 /**
  * Unified Alpaca Service
@@ -116,7 +132,7 @@ export class AlpacaService {
     } catch (error: any) {
       return {
         success: false,
-        error: error.message || 'Initialization failed',
+        error: error.message || "Initialization failed",
       };
     }
   }
@@ -136,14 +152,15 @@ export class AlpacaService {
     const [account, positions, openOrders, marketStatus] = await Promise.all([
       this.account.getAccount(),
       this.trading.getPositions(),
-      this.trading.getOrders({ status: 'open' }),
+      this.trading.getOrders({ status: "open" }),
       this.clock.getMarketStatus(),
     ]);
 
     const portfolioValue = parseFloat(account.portfolio_value);
     const lastEquity = parseFloat(account.last_equity);
     const todayProfitLoss = portfolioValue - lastEquity;
-    const todayProfitLossPercent = lastEquity > 0 ? (todayProfitLoss / lastEquity) * 100 : 0;
+    const todayProfitLossPercent =
+      lastEquity > 0 ? (todayProfitLoss / lastEquity) * 100 : 0;
 
     return {
       account,
@@ -162,14 +179,16 @@ export class AlpacaService {
   async quickBuy(symbol: string, qty: number): Promise<Order> {
     // Validate asset
     const asset = await this.assets.getAsset(symbol);
+
     if (!asset.tradable) {
       throw new Error(`${symbol} is not tradable`);
     }
 
     // Check market status
     const canTrade = await this.account.canTrade();
+
     if (!canTrade.canTrade) {
-      throw new Error(`Cannot trade: ${canTrade.reasons.join(', ')}`);
+      throw new Error(`Cannot trade: ${canTrade.reasons.join(", ")}`);
     }
 
     // Place order
@@ -184,7 +203,7 @@ export class AlpacaService {
     try {
       const position = await this.trading.getPosition(symbol);
       const availableQty = parseFloat(position.qty_available);
-      
+
       if (qty > availableQty) {
         throw new Error(`Insufficient quantity. Available: ${availableQty}`);
       }
@@ -215,10 +234,10 @@ export class AlpacaService {
     ]);
 
     const priceChange = await this.marketData.getPriceChange(symbol);
-    
+
     let position: Position | undefined;
     let hasPosition = false;
-    
+
     try {
       position = await this.trading.getPosition(symbol);
       hasPosition = true;
@@ -244,10 +263,13 @@ let defaultInstance: AlpacaService | null = null;
 /**
  * Get or create the default Alpaca service instance
  */
-export function getAlpacaService(config?: Partial<AlpacaConfig>): AlpacaService {
+export function getAlpacaService(
+  config?: Partial<AlpacaConfig>,
+): AlpacaService {
   if (!defaultInstance || config) {
     defaultInstance = new AlpacaService(config);
   }
+
   return defaultInstance;
 }
 

@@ -3,29 +3,30 @@
  * Manages watchlists and symbol tracking
  */
 
-import { AlpacaClient } from './AlpacaClient';
-import type { Watchlist, CreateWatchlistRequest, Asset } from './alpaca.types';
+import type { Watchlist, CreateWatchlistRequest } from "./alpaca.types";
+
+import { AlpacaClient } from "./AlpacaClient";
 
 export class WatchlistService extends AlpacaClient {
   /**
    * Get all watchlists
    */
   async getWatchlists(): Promise<Watchlist[]> {
-    return this.request<Watchlist[]>('GET', '/v2/watchlists');
+    return this.request<Watchlist[]>("GET", "/v2/watchlists");
   }
 
   /**
    * Get a specific watchlist by ID
    */
   async getWatchlist(watchlistId: string): Promise<Watchlist> {
-    return this.request<Watchlist>('GET', `/v2/watchlists/${watchlistId}`);
+    return this.request<Watchlist>("GET", `/v2/watchlists/${watchlistId}`);
   }
 
   /**
    * Create a new watchlist
    */
   async createWatchlist(request: CreateWatchlistRequest): Promise<Watchlist> {
-    return this.request<Watchlist>('POST', '/v2/watchlists', request);
+    return this.request<Watchlist>("POST", "/v2/watchlists", request);
   }
 
   /**
@@ -36,29 +37,41 @@ export class WatchlistService extends AlpacaClient {
     updates: {
       name?: string;
       symbols?: string[];
-    }
+    },
   ): Promise<Watchlist> {
-    return this.request<Watchlist>('PUT', `/v2/watchlists/${watchlistId}`, updates);
+    return this.request<Watchlist>(
+      "PUT",
+      `/v2/watchlists/${watchlistId}`,
+      updates,
+    );
   }
 
   /**
    * Add a symbol to a watchlist
    */
-  async addSymbolToWatchlist(watchlistId: string, symbol: string): Promise<Watchlist> {
-    return this.request<Watchlist>('POST', `/v2/watchlists/${watchlistId}`, { symbol });
+  async addSymbolToWatchlist(
+    watchlistId: string,
+    symbol: string,
+  ): Promise<Watchlist> {
+    return this.request<Watchlist>("POST", `/v2/watchlists/${watchlistId}`, {
+      symbol,
+    });
   }
 
   /**
    * Add multiple symbols to a watchlist
    */
-  async addSymbolsToWatchlist(watchlistId: string, symbols: string[]): Promise<Watchlist> {
+  async addSymbolsToWatchlist(
+    watchlistId: string,
+    symbols: string[],
+  ): Promise<Watchlist> {
     try {
       let watchlist = await this.getWatchlist(watchlistId);
-      
+
       for (const symbol of symbols) {
         watchlist = await this.addSymbolToWatchlist(watchlistId, symbol);
       }
-      
+
       return watchlist;
     } catch (error) {
       return this.handleError(error);
@@ -68,14 +81,23 @@ export class WatchlistService extends AlpacaClient {
   /**
    * Remove a symbol from a watchlist
    */
-  async removeSymbolFromWatchlist(watchlistId: string, symbol: string): Promise<void> {
-    await this.request<void>('DELETE', `/v2/watchlists/${watchlistId}/${symbol}`);
+  async removeSymbolFromWatchlist(
+    watchlistId: string,
+    symbol: string,
+  ): Promise<void> {
+    await this.request<void>(
+      "DELETE",
+      `/v2/watchlists/${watchlistId}/${symbol}`,
+    );
   }
 
   /**
    * Remove multiple symbols from a watchlist
    */
-  async removeSymbolsFromWatchlist(watchlistId: string, symbols: string[]): Promise<void> {
+  async removeSymbolsFromWatchlist(
+    watchlistId: string,
+    symbols: string[],
+  ): Promise<void> {
     try {
       for (const symbol of symbols) {
         await this.removeSymbolFromWatchlist(watchlistId, symbol);
@@ -89,7 +111,7 @@ export class WatchlistService extends AlpacaClient {
    * Delete a watchlist
    */
   async deleteWatchlist(watchlistId: string): Promise<void> {
-    await this.request<void>('DELETE', `/v2/watchlists/${watchlistId}`);
+    await this.request<void>("DELETE", `/v2/watchlists/${watchlistId}`);
   }
 
   /**
@@ -98,7 +120,11 @@ export class WatchlistService extends AlpacaClient {
   async findWatchlistByName(name: string): Promise<Watchlist | null> {
     try {
       const watchlists = await this.getWatchlists();
-      return watchlists.find(w => w.name.toLowerCase() === name.toLowerCase()) || null;
+
+      return (
+        watchlists.find((w) => w.name.toLowerCase() === name.toLowerCase()) ||
+        null
+      );
     } catch (error) {
       return null;
     }
@@ -117,8 +143,9 @@ export class WatchlistService extends AlpacaClient {
 
       for (const watchlist of watchlists) {
         const hasSymbol = watchlist.assets.some(
-          asset => asset.symbol.toLowerCase() === symbol.toLowerCase()
+          (asset) => asset.symbol.toLowerCase() === symbol.toLowerCase(),
         );
+
         if (hasSymbol) {
           foundIn.push({ id: watchlist.id, name: watchlist.name });
         }
@@ -136,12 +163,17 @@ export class WatchlistService extends AlpacaClient {
   /**
    * Get or create a watchlist by name
    */
-  async getOrCreateWatchlist(name: string, symbols: string[] = []): Promise<Watchlist> {
+  async getOrCreateWatchlist(
+    name: string,
+    symbols: string[] = [],
+  ): Promise<Watchlist> {
     try {
       const existing = await this.findWatchlistByName(name);
+
       if (existing) {
         return existing;
       }
+
       return await this.createWatchlist({ name, symbols });
     } catch (error) {
       return this.handleError(error);
@@ -151,10 +183,14 @@ export class WatchlistService extends AlpacaClient {
   /**
    * Clone a watchlist
    */
-  async cloneWatchlist(watchlistId: string, newName: string): Promise<Watchlist> {
+  async cloneWatchlist(
+    watchlistId: string,
+    newName: string,
+  ): Promise<Watchlist> {
     try {
       const original = await this.getWatchlist(watchlistId);
-      const symbols = original.assets.map(asset => asset.symbol);
+      const symbols = original.assets.map((asset) => asset.symbol);
+
       return await this.createWatchlist({ name: newName, symbols });
     } catch (error) {
       return this.handleError(error);
@@ -167,7 +203,8 @@ export class WatchlistService extends AlpacaClient {
   async getWatchlistSymbols(watchlistId: string): Promise<string[]> {
     try {
       const watchlist = await this.getWatchlist(watchlistId);
-      return watchlist.assets.map(asset => asset.symbol);
+
+      return watchlist.assets.map((asset) => asset.symbol);
     } catch (error) {
       return this.handleError(error);
     }
@@ -179,14 +216,15 @@ export class WatchlistService extends AlpacaClient {
   async mergeWatchlists(
     watchlistIds: string[],
     newName: string,
-    deleteOriginals: boolean = false
+    deleteOriginals: boolean = false,
   ): Promise<Watchlist> {
     try {
       const allSymbols = new Set<string>();
 
       for (const id of watchlistIds) {
         const symbols = await this.getWatchlistSymbols(id);
-        symbols.forEach(symbol => allSymbols.add(symbol));
+
+        symbols.forEach((symbol) => allSymbols.add(symbol));
       }
 
       const merged = await this.createWatchlist({
@@ -218,17 +256,18 @@ export class WatchlistService extends AlpacaClient {
   }> {
     try {
       const watchlist = await this.getWatchlist(watchlistId);
-      
+
       const exchanges: Record<string, number> = {};
-      watchlist.assets.forEach(asset => {
+
+      watchlist.assets.forEach((asset) => {
         exchanges[asset.exchange] = (exchanges[asset.exchange] || 0) + 1;
       });
 
       return {
         totalSymbols: watchlist.assets.length,
-        tradableSymbols: watchlist.assets.filter(a => a.tradable).length,
-        marginableSymbols: watchlist.assets.filter(a => a.marginable).length,
-        shortableSymbols: watchlist.assets.filter(a => a.shortable).length,
+        tradableSymbols: watchlist.assets.filter((a) => a.tradable).length,
+        marginableSymbols: watchlist.assets.filter((a) => a.marginable).length,
+        shortableSymbols: watchlist.assets.filter((a) => a.shortable).length,
         exchanges,
       };
     } catch (error) {

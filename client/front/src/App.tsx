@@ -1,4 +1,5 @@
 import { Route, Routes } from "react-router-dom";
+
 import { IndexPage } from "./pages";
 import Dashboard from "./pages/dashboard";
 import MarketPage from "./pages/market";

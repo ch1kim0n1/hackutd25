@@ -2,6 +2,7 @@ import React, { useRef, useEffect } from "react";
 import { Chip } from "@heroui/chip";
 import { Card, CardBody } from "@heroui/card";
 import { Button } from "@heroui/button";
+
 import { Asset } from "@/types";
 
 interface StockListProps {
@@ -13,12 +14,12 @@ interface StockListProps {
   onHighlightDismiss?: () => void; // Callback when user dismisses highlight
 }
 
-export const StockList: React.FC<StockListProps> = ({ 
-  assets, 
+export const StockList: React.FC<StockListProps> = ({
+  assets,
   onAssetClick,
   highlightedSymbols = [],
   scrollToSymbol = null,
-  onHighlightDismiss
+  onHighlightDismiss,
 }) => {
   const assetRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
@@ -26,27 +27,29 @@ export const StockList: React.FC<StockListProps> = ({
   useEffect(() => {
     if (scrollToSymbol && assetRefs.current[scrollToSymbol]) {
       assetRefs.current[scrollToSymbol]?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center'
+        behavior: "smooth",
+        block: "center",
       });
     }
   }, [scrollToSymbol]);
 
   const formatPrice = (price: number) => {
-    return price >= 1 
-      ? price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    return price >= 1
+      ? price.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
       : price.toFixed(6);
   };
 
   const formatChange = (change: number) => {
-    const sign = change >= 0 ? '+' : '';
+    const sign = change >= 0 ? "+" : "";
+
     return `${sign}${change.toFixed(2)}%`;
   };
 
   return (
-    <Card
-      className="shadow-lg h-full flex flex-col"
-    >
+    <Card className="shadow-lg h-full flex flex-col">
       <CardBody className="p-4 flex flex-col h-full overflow-hidden">
         <div className="flex-shrink-0">
           {/* Header row */}
@@ -63,19 +66,19 @@ export const StockList: React.FC<StockListProps> = ({
           {/* Asset rows */}
           {assets.map((asset) => {
             const isHighlighted = highlightedSymbols.includes(asset.symbol);
-            
+
             return (
-              <div 
+              <div
                 key={asset.symbol}
-                ref={(el) => assetRefs.current[asset.symbol] = el}
+                ref={(el) => (assetRefs.current[asset.symbol] = el)}
               >
                 <Card
-                  isPressable={!!onAssetClick}
                   className={`
                     hover:bg-default-100 
                     transition-all duration-300 w-full
-                    ${isHighlighted ? 'ring-2 ring-secondary shadow-lg shadow-secondary/20' : ''}
+                    ${isHighlighted ? "ring-2 ring-secondary shadow-lg shadow-secondary/20" : ""}
                   `}
+                  isPressable={!!onAssetClick}
                   onPress={() => onAssetClick?.(asset)}
                 >
                   <CardBody className="px-4 py-3">
@@ -83,13 +86,13 @@ export const StockList: React.FC<StockListProps> = ({
                       {/* Symbol badge */}
                       <div className="col-span-3">
                         <Chip
-                          variant="flat"
-                          color={isHighlighted ? "secondary" : "primary"}
-                          size="sm"
                           classNames={{
                             base: "font-mono font-bold",
-                            content: "text-xs"
+                            content: "text-xs",
                           }}
+                          color={isHighlighted ? "secondary" : "primary"}
+                          size="sm"
+                          variant="flat"
                         >
                           {asset.symbol}
                         </Chip>
@@ -112,13 +115,13 @@ export const StockList: React.FC<StockListProps> = ({
                       {/* Daily change */}
                       <div className="col-span-3 text-right">
                         <Chip
-                          variant="flat"
-                          color={asset.dailyChange >= 0 ? "success" : "danger"}
-                          size="sm"
                           classNames={{
                             base: "font-mono",
-                            content: "text-xs font-semibold"
+                            content: "text-xs font-semibold",
                           }}
+                          color={asset.dailyChange >= 0 ? "success" : "danger"}
+                          size="sm"
+                          variant="flat"
                         >
                           {formatChange(asset.dailyChange)}
                         </Chip>
@@ -126,7 +129,7 @@ export const StockList: React.FC<StockListProps> = ({
                     </div>
                   </CardBody>
                 </Card>
-                
+
                 {/* AI Highlight Notice */}
                 {isHighlighted && (
                   <div className="mt-2 p-3 bg-secondary/10 border border-secondary rounded-lg flex items-center justify-between">
@@ -134,9 +137,9 @@ export const StockList: React.FC<StockListProps> = ({
                       AI recommends reviewing this asset
                     </span>
                     <Button
+                      color="default"
                       size="sm"
                       variant="flat"
-                      color="default"
                       onPress={() => {
                         onHighlightDismiss?.();
                       }}
@@ -153,7 +156,9 @@ export const StockList: React.FC<StockListProps> = ({
           {assets.length === 0 && (
             <Card>
               <CardBody className="py-8">
-                <p className="text-center text-default-400">No assets to display</p>
+                <p className="text-center text-default-400">
+                  No assets to display
+                </p>
               </CardBody>
             </Card>
           )}

@@ -7,8 +7,17 @@
 export interface Account {
   id: string;
   account_number: string;
-  status: 'ACTIVE' | 'ACCOUNT_CLOSED' | 'ACCOUNT_UPDATED' | 'ACTION_REQUIRED' | 'DISABLED' | 'INACTIVE' | 'ONBOARDING' | 'REJECTED' | 'SUBMITTED';
-  crypto_status?: 'ACTIVE' | 'INACTIVE';
+  status:
+    | "ACTIVE"
+    | "ACCOUNT_CLOSED"
+    | "ACCOUNT_UPDATED"
+    | "ACTION_REQUIRED"
+    | "DISABLED"
+    | "INACTIVE"
+    | "ONBOARDING"
+    | "REJECTED"
+    | "SUBMITTED";
+  crypto_status?: "ACTIVE" | "INACTIVE";
   currency: string;
   buying_power: string;
   regt_buying_power: string;
@@ -43,11 +52,11 @@ export interface Position {
   asset_id: string;
   symbol: string;
   exchange: string;
-  asset_class: 'us_equity' | 'crypto';
+  asset_class: "us_equity" | "crypto";
   asset_marginable: boolean;
   qty: string;
   avg_entry_price: string;
-  side: 'long' | 'short';
+  side: "long" | "short";
   market_value: string;
   cost_basis: string;
   unrealized_pl: string;
@@ -61,25 +70,30 @@ export interface Position {
 }
 
 // Order Types
-export type OrderSide = 'buy' | 'sell';
-export type OrderType = 'market' | 'limit' | 'stop' | 'stop_limit' | 'trailing_stop';
-export type TimeInForce = 'day' | 'gtc' | 'opg' | 'cls' | 'ioc' | 'fok';
-export type OrderStatus = 
-  | 'new'
-  | 'partially_filled'
-  | 'filled'
-  | 'done_for_day'
-  | 'canceled'
-  | 'expired'
-  | 'replaced'
-  | 'pending_cancel'
-  | 'pending_replace'
-  | 'pending_new'
-  | 'accepted'
-  | 'pending'
-  | 'rejected'
-  | 'suspended'
-  | 'calculated';
+export type OrderSide = "buy" | "sell";
+export type OrderType =
+  | "market"
+  | "limit"
+  | "stop"
+  | "stop_limit"
+  | "trailing_stop";
+export type TimeInForce = "day" | "gtc" | "opg" | "cls" | "ioc" | "fok";
+export type OrderStatus =
+  | "new"
+  | "partially_filled"
+  | "filled"
+  | "done_for_day"
+  | "canceled"
+  | "expired"
+  | "replaced"
+  | "pending_cancel"
+  | "pending_replace"
+  | "pending_new"
+  | "accepted"
+  | "pending"
+  | "rejected"
+  | "suspended"
+  | "calculated";
 
 export interface Order {
   id: string;
@@ -129,7 +143,7 @@ export interface CreateOrderRequest {
   trail_percent?: number;
   extended_hours?: boolean;
   client_order_id?: string;
-  order_class?: 'simple' | 'bracket' | 'oco' | 'oto';
+  order_class?: "simple" | "bracket" | "oco" | "oto";
   take_profit?: {
     limit_price: number;
   };
@@ -142,11 +156,11 @@ export interface CreateOrderRequest {
 // Asset Types
 export interface Asset {
   id: string;
-  class: 'us_equity' | 'crypto';
+  class: "us_equity" | "crypto";
   exchange: string;
   symbol: string;
   name: string;
-  status: 'active' | 'inactive';
+  status: "active" | "inactive";
   tradable: boolean;
   marginable: boolean;
   maintenance_margin_requirement: number;
@@ -261,35 +275,35 @@ export interface News {
 }
 
 // Activity Types
-export type ActivityType = 
-  | 'FILL'
-  | 'TRANS'
-  | 'MISC'
-  | 'ACATC'
-  | 'ACATS'
-  | 'CSD'
-  | 'CSW'
-  | 'DIV'
-  | 'DIVCGL'
-  | 'DIVCGS'
-  | 'DIVFEE'
-  | 'DIVFT'
-  | 'DIVNRA'
-  | 'DIVROC'
-  | 'DIVTXEX'
-  | 'INT'
-  | 'JNLC'
-  | 'JNLS'
-  | 'MA'
-  | 'NC'
-  | 'OPASN'
-  | 'OPEXP'
-  | 'OPXRC'
-  | 'PTC'
-  | 'PTR'
-  | 'REORG'
-  | 'SSO'
-  | 'SSP';
+export type ActivityType =
+  | "FILL"
+  | "TRANS"
+  | "MISC"
+  | "ACATC"
+  | "ACATS"
+  | "CSD"
+  | "CSW"
+  | "DIV"
+  | "DIVCGL"
+  | "DIVCGS"
+  | "DIVFEE"
+  | "DIVFT"
+  | "DIVNRA"
+  | "DIVROC"
+  | "DIVTXEX"
+  | "INT"
+  | "JNLC"
+  | "JNLS"
+  | "MA"
+  | "NC"
+  | "OPASN"
+  | "OPEXP"
+  | "OPXRC"
+  | "PTC"
+  | "PTR"
+  | "REORG"
+  | "SSO"
+  | "SSP";
 
 export interface Activity {
   id: string;

@@ -3,7 +3,8 @@
  * Easy-to-use hooks for React components
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from "react";
+
 import {
   AlpacaService,
   Account,
@@ -12,7 +13,7 @@ import {
   Asset,
   Clock,
   Bar,
-} from './index';
+} from "./index";
 
 // ==================== Main Alpaca Hook ====================
 
@@ -39,9 +40,10 @@ export function useAccount() {
       setLoading(true);
       setError(null);
       const data = await alpaca.account.getAccount();
+
       setAccount(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch account');
+      setError(err.message || "Failed to fetch account");
     } finally {
       setLoading(false);
     }
@@ -65,9 +67,10 @@ export function useAccountMetrics() {
       setLoading(true);
       setError(null);
       const data = await alpaca.account.getAccountMetrics();
+
       setMetrics(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch metrics');
+      setError(err.message || "Failed to fetch metrics");
     } finally {
       setLoading(false);
     }
@@ -93,22 +96,26 @@ export function usePositions() {
       setLoading(true);
       setError(null);
       const data = await alpaca.trading.getPositions();
+
       setPositions(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch positions');
+      setError(err.message || "Failed to fetch positions");
     } finally {
       setLoading(false);
     }
   }, [alpaca]);
 
-  const closePosition = useCallback(async (symbol: string) => {
-    try {
-      await alpaca.trading.closePosition(symbol);
-      await refresh();
-    } catch (err: any) {
-      throw new Error(err.message || 'Failed to close position');
-    }
-  }, [alpaca, refresh]);
+  const closePosition = useCallback(
+    async (symbol: string) => {
+      try {
+        await alpaca.trading.closePosition(symbol);
+        await refresh();
+      } catch (err: any) {
+        throw new Error(err.message || "Failed to close position");
+      }
+    },
+    [alpaca, refresh],
+  );
 
   useEffect(() => {
     refresh();
@@ -117,7 +124,7 @@ export function usePositions() {
   return { positions, loading, error, refresh, closePosition };
 }
 
-export function useOrders(status: 'all' | 'open' | 'closed' = 'open') {
+export function useOrders(status: "all" | "open" | "closed" = "open") {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -128,32 +135,41 @@ export function useOrders(status: 'all' | 'open' | 'closed' = 'open') {
       setLoading(true);
       setError(null);
       const data = await alpaca.trading.getOrders({ status });
+
       setOrders(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch orders');
+      setError(err.message || "Failed to fetch orders");
     } finally {
       setLoading(false);
     }
   }, [alpaca, status]);
 
-  const cancelOrder = useCallback(async (orderId: string) => {
-    try {
-      await alpaca.trading.cancelOrder(orderId);
-      await refresh();
-    } catch (err: any) {
-      throw new Error(err.message || 'Failed to cancel order');
-    }
-  }, [alpaca, refresh]);
+  const cancelOrder = useCallback(
+    async (orderId: string) => {
+      try {
+        await alpaca.trading.cancelOrder(orderId);
+        await refresh();
+      } catch (err: any) {
+        throw new Error(err.message || "Failed to cancel order");
+      }
+    },
+    [alpaca, refresh],
+  );
 
-  const placeOrder = useCallback(async (symbol: string, qty: number, side: 'buy' | 'sell') => {
-    try {
-      const order = await alpaca.trading.marketOrder(symbol, qty, side);
-      await refresh();
-      return order;
-    } catch (err: any) {
-      throw new Error(err.message || 'Failed to place order');
-    }
-  }, [alpaca, refresh]);
+  const placeOrder = useCallback(
+    async (symbol: string, qty: number, side: "buy" | "sell") => {
+      try {
+        const order = await alpaca.trading.marketOrder(symbol, qty, side);
+
+        await refresh();
+
+        return order;
+      } catch (err: any) {
+        throw new Error(err.message || "Failed to place order");
+      }
+    },
+    [alpaca, refresh],
+  );
 
   useEffect(() => {
     refresh();
@@ -179,10 +195,11 @@ export function useStockPrice(symbol: string, interval: number = 5000) {
         alpaca.marketData.getCurrentPrice(symbol),
         alpaca.marketData.getPriceChange(symbol),
       ]);
+
       setPrice(currentPrice);
       setChange(priceChange);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch price');
+      setError(err.message || "Failed to fetch price");
     } finally {
       setLoading(false);
     }
@@ -191,6 +208,7 @@ export function useStockPrice(symbol: string, interval: number = 5000) {
   useEffect(() => {
     refresh();
     const intervalId = setInterval(refresh, interval);
+
     return () => clearInterval(intervalId);
   }, [refresh, interval]);
 
@@ -199,8 +217,8 @@ export function useStockPrice(symbol: string, interval: number = 5000) {
 
 export function useStockBars(
   symbol: string,
-  timeframe: '1Min' | '5Min' | '15Min' | '1Hour' | '1Day' = '1Day',
-  days: number = 30
+  timeframe: "1Min" | "5Min" | "15Min" | "1Hour" | "1Day" = "1Day",
+  days: number = 30,
 ) {
   const [bars, setBars] = useState<Bar[]>([]);
   const [loading, setLoading] = useState(true);
@@ -211,16 +229,18 @@ export function useStockBars(
     try {
       setLoading(true);
       setError(null);
-      
-      if (timeframe === '1Day') {
+
+      if (timeframe === "1Day") {
         const data = await alpaca.marketData.getDailyBars(symbol, days);
+
         setBars(data);
       } else {
         const data = await alpaca.marketData.getIntradayBars(symbol, timeframe);
+
         setBars(data);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch bars');
+      setError(err.message || "Failed to fetch bars");
     } finally {
       setLoading(false);
     }
@@ -244,9 +264,10 @@ export function useMarketOverview(symbols: string[]) {
       setLoading(true);
       setError(null);
       const data = await alpaca.marketData.getMarketOverview(symbols);
+
       setOverview(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch market overview');
+      setError(err.message || "Failed to fetch market overview");
     } finally {
       setLoading(false);
     }
@@ -270,6 +291,7 @@ export function useAssetSearch(query: string) {
   useEffect(() => {
     if (!query || query.length < 1) {
       setAssets([]);
+
       return;
     }
 
@@ -278,15 +300,17 @@ export function useAssetSearch(query: string) {
         setLoading(true);
         setError(null);
         const results = await alpaca.assets.searchAssets(query, 20);
+
         setAssets(results);
       } catch (err: any) {
-        setError(err.message || 'Search failed');
+        setError(err.message || "Search failed");
       } finally {
         setLoading(false);
       }
     };
 
     const debounce = setTimeout(search, 300);
+
     return () => clearTimeout(debounce);
   }, [alpaca, query]);
 
@@ -306,9 +330,10 @@ export function useMarketStatus() {
       setLoading(true);
       setError(null);
       const data = await alpaca.clock.getClock();
+
       setStatus(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch market status');
+      setError(err.message || "Failed to fetch market status");
     } finally {
       setLoading(false);
     }
@@ -318,6 +343,7 @@ export function useMarketStatus() {
     refresh();
     // Refresh every minute
     const intervalId = setInterval(refresh, 60000);
+
     return () => clearInterval(intervalId);
   }, [refresh]);
 
@@ -337,9 +363,10 @@ export function useDashboard() {
       setLoading(true);
       setError(null);
       const data = await alpaca.getDashboardData();
+
       setDashboard(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch dashboard data');
+      setError(err.message || "Failed to fetch dashboard data");
     } finally {
       setLoading(false);
     }
@@ -359,52 +386,69 @@ export function useTrading() {
   const [error, setError] = useState<string | null>(null);
   const alpaca = useAlpaca();
 
-  const buy = useCallback(async (symbol: string, qty: number) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const order = await alpaca.quickBuy(symbol, qty);
-      return order;
-    } catch (err: any) {
-      setError(err.message || 'Buy order failed');
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, [alpaca]);
+  const buy = useCallback(
+    async (symbol: string, qty: number) => {
+      try {
+        setLoading(true);
+        setError(null);
+        const order = await alpaca.quickBuy(symbol, qty);
 
-  const sell = useCallback(async (symbol: string, qty: number) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const order = await alpaca.quickSell(symbol, qty);
-      return order;
-    } catch (err: any) {
-      setError(err.message || 'Sell order failed');
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, [alpaca]);
+        return order;
+      } catch (err: any) {
+        setError(err.message || "Buy order failed");
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [alpaca],
+  );
 
-  const limitOrder = useCallback(async (
-    symbol: string,
-    qty: number,
-    side: 'buy' | 'sell',
-    limitPrice: number
-  ) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const order = await alpaca.trading.limitOrder(symbol, qty, side, limitPrice);
-      return order;
-    } catch (err: any) {
-      setError(err.message || 'Limit order failed');
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, [alpaca]);
+  const sell = useCallback(
+    async (symbol: string, qty: number) => {
+      try {
+        setLoading(true);
+        setError(null);
+        const order = await alpaca.quickSell(symbol, qty);
+
+        return order;
+      } catch (err: any) {
+        setError(err.message || "Sell order failed");
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [alpaca],
+  );
+
+  const limitOrder = useCallback(
+    async (
+      symbol: string,
+      qty: number,
+      side: "buy" | "sell",
+      limitPrice: number,
+    ) => {
+      try {
+        setLoading(true);
+        setError(null);
+        const order = await alpaca.trading.limitOrder(
+          symbol,
+          qty,
+          side,
+          limitPrice,
+        );
+
+        return order;
+      } catch (err: any) {
+        setError(err.message || "Limit order failed");
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [alpaca],
+  );
 
   return { buy, sell, limitOrder, loading, error };
 }

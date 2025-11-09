@@ -14,12 +14,12 @@ export const AnalyzeButton: React.FC<AnalyzeButtonProps> = ({
 }) => {
   return (
     <Button
-      onPress={onAnalyze}
-      isLoading={isAnalyzing}
+      className={`font-semibold px-8 animate-glow ${className}`}
       color="primary"
+      isLoading={isAnalyzing}
       size="lg"
       variant="shadow"
-      className={`font-semibold px-8 animate-glow ${className}`}
+      onPress={onAnalyze}
     >
       {isAnalyzing ? "Analyzing..." : "Analyze Portfolio"}
     </Button>

@@ -3,40 +3,45 @@
  * Manages asset information and queries
  */
 
-import { AlpacaClient } from './AlpacaClient';
-import type { Asset } from './alpaca.types';
+import type { Asset } from "./alpaca.types";
+
+import { AlpacaClient } from "./AlpacaClient";
 
 export class AssetService extends AlpacaClient {
   /**
    * Get all assets
    */
   async getAssets(params?: {
-    status?: 'active' | 'inactive';
-    asset_class?: 'us_equity' | 'crypto';
+    status?: "active" | "inactive";
+    asset_class?: "us_equity" | "crypto";
     exchange?: string;
   }): Promise<Asset[]> {
     const queryParams = new URLSearchParams(params as any).toString();
-    const endpoint = `/v2/assets${queryParams ? `?${queryParams}` : ''}`;
-    return this.request<Asset[]>('GET', endpoint);
+    const endpoint = `/v2/assets${queryParams ? `?${queryParams}` : ""}`;
+
+    return this.request<Asset[]>("GET", endpoint);
   }
 
   /**
    * Get a specific asset by symbol
    */
   async getAsset(symbol: string): Promise<Asset> {
-    return this.request<Asset>('GET', `/v2/assets/${symbol}`);
+    return this.request<Asset>("GET", `/v2/assets/${symbol}`);
   }
 
   /**
    * Get all active tradable assets
    */
-  async getTradableAssets(assetClass?: 'us_equity' | 'crypto'): Promise<Asset[]> {
+  async getTradableAssets(
+    assetClass?: "us_equity" | "crypto",
+  ): Promise<Asset[]> {
     try {
       const assets = await this.getAssets({
-        status: 'active',
+        status: "active",
         asset_class: assetClass,
       });
-      return assets.filter(asset => asset.tradable);
+
+      return assets.filter((asset) => asset.tradable);
     } catch (error) {
       return this.handleError(error);
     }
@@ -47,8 +52,9 @@ export class AssetService extends AlpacaClient {
    */
   async getMarginableAssets(): Promise<Asset[]> {
     try {
-      const assets = await this.getAssets({ status: 'active' });
-      return assets.filter(asset => asset.marginable);
+      const assets = await this.getAssets({ status: "active" });
+
+      return assets.filter((asset) => asset.marginable);
     } catch (error) {
       return this.handleError(error);
     }
@@ -59,8 +65,9 @@ export class AssetService extends AlpacaClient {
    */
   async getShortableAssets(): Promise<Asset[]> {
     try {
-      const assets = await this.getAssets({ status: 'active' });
-      return assets.filter(asset => asset.shortable);
+      const assets = await this.getAssets({ status: "active" });
+
+      return assets.filter((asset) => asset.shortable);
     } catch (error) {
       return this.handleError(error);
     }
@@ -71,8 +78,9 @@ export class AssetService extends AlpacaClient {
    */
   async getFractionableAssets(): Promise<Asset[]> {
     try {
-      const assets = await this.getAssets({ status: 'active' });
-      return assets.filter(asset => asset.fractionable);
+      const assets = await this.getAssets({ status: "active" });
+
+      return assets.filter((asset) => asset.fractionable);
     } catch (error) {
       return this.handleError(error);
     }
@@ -83,13 +91,14 @@ export class AssetService extends AlpacaClient {
    */
   async searchAssets(query: string, limit: number = 20): Promise<Asset[]> {
     try {
-      const assets = await this.getAssets({ status: 'active' });
+      const assets = await this.getAssets({ status: "active" });
       const lowercaseQuery = query.toLowerCase();
-      
+
       return assets
-        .filter(asset => 
-          asset.symbol.toLowerCase().includes(lowercaseQuery) ||
-          asset.name.toLowerCase().includes(lowercaseQuery)
+        .filter(
+          (asset) =>
+            asset.symbol.toLowerCase().includes(lowercaseQuery) ||
+            asset.name.toLowerCase().includes(lowercaseQuery),
         )
         .slice(0, limit);
     } catch (error) {
@@ -103,7 +112,8 @@ export class AssetService extends AlpacaClient {
   async isAssetTradable(symbol: string): Promise<boolean> {
     try {
       const asset = await this.getAsset(symbol);
-      return asset.tradable && asset.status === 'active';
+
+      return asset.tradable && asset.status === "active";
     } catch (error) {
       return false;
     }
@@ -124,6 +134,7 @@ export class AssetService extends AlpacaClient {
   }> {
     try {
       const asset = await this.getAsset(symbol);
+
       return {
         tradable: asset.tradable,
         marginable: asset.marginable,
@@ -144,7 +155,8 @@ export class AssetService extends AlpacaClient {
    */
   async getAssetsByExchange(exchange: string): Promise<Asset[]> {
     try {
-      const assets = await this.getAssets({ status: 'active', exchange });
+      const assets = await this.getAssets({ status: "active", exchange });
+
       return assets;
     } catch (error) {
       return this.handleError(error);
@@ -156,9 +168,9 @@ export class AssetService extends AlpacaClient {
    */
   async getCryptoAssets(): Promise<Asset[]> {
     try {
-      return await this.getAssets({ 
-        status: 'active', 
-        asset_class: 'crypto' 
+      return await this.getAssets({
+        status: "active",
+        asset_class: "crypto",
       });
     } catch (error) {
       return this.handleError(error);
@@ -170,9 +182,9 @@ export class AssetService extends AlpacaClient {
    */
   async getEquityAssets(): Promise<Asset[]> {
     try {
-      return await this.getAssets({ 
-        status: 'active', 
-        asset_class: 'us_equity' 
+      return await this.getAssets({
+        status: "active",
+        asset_class: "us_equity",
       });
     } catch (error) {
       return this.handleError(error);
@@ -185,23 +197,31 @@ export class AssetService extends AlpacaClient {
   async validateSymbols(symbols: string[]): Promise<{
     valid: string[];
     invalid: string[];
-    details: Record<string, { exists: boolean; tradable: boolean; reason?: string }>;
+    details: Record<
+      string,
+      { exists: boolean; tradable: boolean; reason?: string }
+    >;
   }> {
     const results = {
       valid: [] as string[],
       invalid: [] as string[],
-      details: {} as Record<string, { exists: boolean; tradable: boolean; reason?: string }>,
+      details: {} as Record<
+        string,
+        { exists: boolean; tradable: boolean; reason?: string }
+      >,
     };
 
     for (const symbol of symbols) {
       try {
         const asset = await this.getAsset(symbol);
-        const isTradable = asset.tradable && asset.status === 'active';
-        
+        const isTradable = asset.tradable && asset.status === "active";
+
         results.details[symbol] = {
           exists: true,
           tradable: isTradable,
-          reason: !isTradable ? `Status: ${asset.status}, Tradable: ${asset.tradable}` : undefined,
+          reason: !isTradable
+            ? `Status: ${asset.status}, Tradable: ${asset.tradable}`
+            : undefined,
         };
 
         if (isTradable) {
@@ -214,7 +234,7 @@ export class AssetService extends AlpacaClient {
         results.details[symbol] = {
           exists: false,
           tradable: false,
-          reason: 'Asset not found',
+          reason: "Asset not found",
         };
       }
     }

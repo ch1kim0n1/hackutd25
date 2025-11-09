@@ -3,15 +3,16 @@
  * Manages market hours, calendar, and trading schedule
  */
 
-import { AlpacaClient } from './AlpacaClient';
-import type { Clock, Calendar } from './alpaca.types';
+import type { Clock, Calendar } from "./alpaca.types";
+
+import { AlpacaClient } from "./AlpacaClient";
 
 export class ClockService extends AlpacaClient {
   /**
    * Get current market clock
    */
   async getClock(): Promise<Clock> {
-    return this.request<Clock>('GET', '/v2/clock');
+    return this.request<Clock>("GET", "/v2/clock");
   }
 
   /**
@@ -20,6 +21,7 @@ export class ClockService extends AlpacaClient {
   async isMarketOpen(): Promise<boolean> {
     try {
       const clock = await this.getClock();
+
       return clock.is_open;
     } catch (error) {
       return false;
@@ -32,6 +34,7 @@ export class ClockService extends AlpacaClient {
   async getNextOpen(): Promise<Date> {
     try {
       const clock = await this.getClock();
+
       return new Date(clock.next_open);
     } catch (error) {
       return this.handleError(error);
@@ -44,6 +47,7 @@ export class ClockService extends AlpacaClient {
   async getNextClose(): Promise<Date> {
     try {
       const clock = await this.getClock();
+
       return new Date(clock.next_close);
     } catch (error) {
       return this.handleError(error);
@@ -58,8 +62,9 @@ export class ClockService extends AlpacaClient {
     end?: string | Date;
   }): Promise<Calendar[]> {
     const queryParams = new URLSearchParams(params as any).toString();
-    const endpoint = `/v2/calendar${queryParams ? `?${queryParams}` : ''}`;
-    return this.request<Calendar[]>('GET', endpoint);
+    const endpoint = `/v2/calendar${queryParams ? `?${queryParams}` : ""}`;
+
+    return this.request<Calendar[]>("GET", endpoint);
   }
 
   /**
@@ -68,8 +73,8 @@ export class ClockService extends AlpacaClient {
   async getTodayHours(): Promise<Calendar | null> {
     try {
       const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
-      
+      const todayStr = today.toISOString().split("T")[0];
+
       const calendar = await this.getCalendar({
         start: todayStr,
         end: todayStr,
@@ -88,27 +93,29 @@ export class ClockService extends AlpacaClient {
     isOpen: boolean;
     timeUntilChange: number; // milliseconds
     nextChangeTime: Date;
-    nextChangeType: 'open' | 'close';
+    nextChangeType: "open" | "close";
   }> {
     try {
       const clock = await this.getClock();
       const now = new Date(clock.timestamp);
-      
+
       if (clock.is_open) {
         const nextClose = new Date(clock.next_close);
+
         return {
           isOpen: true,
           timeUntilChange: nextClose.getTime() - now.getTime(),
           nextChangeTime: nextClose,
-          nextChangeType: 'close',
+          nextChangeType: "close",
         };
       } else {
         const nextOpen = new Date(clock.next_open);
+
         return {
           isOpen: false,
           timeUntilChange: nextOpen.getTime() - now.getTime(),
           nextChangeTime: nextOpen,
-          nextChangeType: 'open',
+          nextChangeType: "open",
         };
       }
     } catch (error) {
@@ -132,11 +139,12 @@ export class ClockService extends AlpacaClient {
    */
   async isTradingDay(date: Date): Promise<boolean> {
     try {
-      const dateStr = date.toISOString().split('T')[0];
+      const dateStr = date.toISOString().split("T")[0];
       const calendar = await this.getCalendar({
         start: dateStr,
         end: dateStr,
       });
+
       return calendar.length > 0;
     } catch (error) {
       return false;
@@ -150,9 +158,11 @@ export class ClockService extends AlpacaClient {
     try {
       const start = new Date();
       const end = new Date();
-      end.setDate(end.getDate() + (count * 2)); // Get extra days to account for weekends/holidays
+
+      end.setDate(end.getDate() + count * 2); // Get extra days to account for weekends/holidays
 
       const calendar = await this.getCalendar({ start, end });
+
       return calendar.slice(0, count);
     } catch (error) {
       return this.handleError(error);
@@ -165,10 +175,12 @@ export class ClockService extends AlpacaClient {
   async getPreviousTradingDays(count: number): Promise<Calendar[]> {
     try {
       const start = new Date();
-      start.setDate(start.getDate() - (count * 2)); // Get extra days to account for weekends/holidays
+
+      start.setDate(start.getDate() - count * 2); // Get extra days to account for weekends/holidays
       const end = new Date();
 
       const calendar = await this.getCalendar({ start, end });
+
       return calendar.slice(-count);
     } catch (error) {
       return this.handleError(error);
@@ -194,7 +206,9 @@ export class ClockService extends AlpacaClient {
       const timeInfo = await this.getTimeUntilMarketChange();
 
       const hours = Math.floor(timeInfo.timeUntilChange / (1000 * 60 * 60));
-      const minutes = Math.floor((timeInfo.timeUntilChange % (1000 * 60 * 60)) / (1000 * 60));
+      const minutes = Math.floor(
+        (timeInfo.timeUntilChange % (1000 * 60 * 60)) / (1000 * 60),
+      );
       const timeUntilChangeFormatted = `${hours}h ${minutes}m`;
 
       return {
@@ -219,25 +233,25 @@ export class ClockService extends AlpacaClient {
     try {
       const start = new Date(year, 0, 1);
       const end = new Date(year, 11, 31);
-      
+
       const tradingDays = await this.getCalendar({ start, end });
-      const tradingDates = new Set(tradingDays.map(day => day.date));
-      
+      const tradingDates = new Set(tradingDays.map((day) => day.date));
+
       const holidays: Date[] = [];
       const current = new Date(start);
-      
+
       while (current <= end) {
-        const dateStr = current.toISOString().split('T')[0];
+        const dateStr = current.toISOString().split("T")[0];
         const dayOfWeek = current.getDay();
-        
+
         // If it's a weekday but not a trading day, it's likely a holiday
         if (dayOfWeek !== 0 && dayOfWeek !== 6 && !tradingDates.has(dateStr)) {
           holidays.push(new Date(current));
         }
-        
+
         current.setDate(current.getDate() + 1);
       }
-      
+
       return holidays;
     } catch (error) {
       return this.handleError(error);

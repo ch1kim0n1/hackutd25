@@ -7,7 +7,7 @@ interface UseTypingAnimationOptions {
 
 export const useTypingAnimation = (
   text: string,
-  options: UseTypingAnimationOptions = {}
+  options: UseTypingAnimationOptions = {},
 ) => {
   const { speed = 50, onComplete } = options;
   const [displayedText, setDisplayedText] = useState("");
@@ -30,6 +30,7 @@ export const useTypingAnimation = (
       if (indexRef.current >= textRef.current.length && onComplete) {
         onComplete();
       }
+
       return;
     }
 

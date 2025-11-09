@@ -36,7 +36,7 @@ export const AISearchBar: React.FC<AISearchBarProps> = ({
 
   const handleInputChange = (value: string) => {
     setQuery(value);
-    
+
     // Mock AI suggestions - in real app, this would call an AI service
     if (value.length > 2) {
       const mockSuggestions = [
@@ -45,8 +45,8 @@ export const AISearchBar: React.FC<AISearchBarProps> = ({
         "Analyze my portfolio risk",
         "What stocks are trending today?",
         "Find dividend stocks with >3% yield",
-      ].filter(s => s.toLowerCase().includes(value.toLowerCase()));
-      
+      ].filter((s) => s.toLowerCase().includes(value.toLowerCase()));
+
       setSuggestions(mockSuggestions.slice(0, 3));
     } else {
       setSuggestions([]);
@@ -57,45 +57,46 @@ export const AISearchBar: React.FC<AISearchBarProps> = ({
     <div className={`relative w-full ${className}`}>
       <div className="flex gap-2 items-center">
         <Input
-          value={query}
-          onValueChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          size="lg"
-          variant="bordered"
           classNames={{
             input: "text-base",
-            inputWrapper: "border-default-200 hover:border-primary focus-within:border-primary data-[hover=true]:border-primary",
+            inputWrapper:
+              "border-default-200 hover:border-primary focus-within:border-primary data-[hover=true]:border-primary",
           }}
-          startContent={
-            <svg 
-              className="w-5 h-5 text-default-400"
-              fill="none" 
-              stroke="currentColor" 
-              viewBox="0 0 24 24"
-            >
-              <path 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                strokeWidth={2} 
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" 
-              />
-            </svg>
-          }
           endContent={
             isSearching && (
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary" />
             )
           }
+          placeholder={placeholder}
+          size="lg"
+          startContent={
+            <svg
+              className="w-5 h-5 text-default-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+              />
+            </svg>
+          }
+          value={query}
+          variant="bordered"
+          onKeyDown={handleKeyDown}
+          onValueChange={handleInputChange}
         />
         <Button
-          onPress={handleSearch}
-          isLoading={isSearching}
+          className="px-6 font-semibold"
           color="primary"
+          isDisabled={!query.trim()}
+          isLoading={isSearching}
           size="lg"
           variant="shadow"
-          className="px-6 font-semibold"
-          isDisabled={!query.trim()}
+          onPress={handleSearch}
         >
           Search
         </Button>
@@ -108,17 +109,15 @@ export const AISearchBar: React.FC<AISearchBarProps> = ({
             {suggestions.map((suggestion, index) => (
               <button
                 key={index}
+                className="w-full text-left px-4 py-3 rounded-lg hover:bg-default-100 transition-colors"
                 onClick={() => {
                   setQuery(suggestion);
                   setSuggestions([]);
                 }}
-                className="w-full text-left px-4 py-3 rounded-lg hover:bg-default-100 transition-colors"
               >
                 <div className="flex items-center gap-2">
                   <span className="text-primary text-sm font-medium">AI:</span>
-                  <span className="text-sm text-default-700">
-                    {suggestion}
-                  </span>
+                  <span className="text-sm text-default-700">{suggestion}</span>
                 </div>
               </button>
             ))}

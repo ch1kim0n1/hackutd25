@@ -4,17 +4,20 @@
  * Uses fetch API for browser compatibility (no Node.js dependencies)
  */
 
-import { getAlpacaConfig, type AlpacaConfig } from './alpaca.config';
-import type { AlpacaError } from './alpaca.types';
+import type { AlpacaError } from "./alpaca.types";
+
+import { getAlpacaConfig, type AlpacaConfig } from "./alpaca.config";
 
 export class AlpacaClient {
   protected config: AlpacaConfig;
 
   constructor(config?: Partial<AlpacaConfig>) {
     this.config = { ...getAlpacaConfig(), ...config };
-    
+
     if (!this.config.keyId || !this.config.secretKey) {
-      throw new Error('Alpaca API credentials are required. Please set VITE_ALPACA_API_KEY and VITE_ALPACA_SECRET_KEY');
+      throw new Error(
+        "Alpaca API credentials are required. Please set VITE_ALPACA_API_KEY and VITE_ALPACA_SECRET_KEY",
+      );
     }
   }
 
@@ -41,6 +44,7 @@ export class AlpacaClient {
         code: error.response.status,
         message: error.response.data?.message || error.message,
       };
+
       throw alpacaError;
     }
     throw error;
@@ -50,33 +54,34 @@ export class AlpacaClient {
    * Make a generic API request
    */
   protected async request<T>(
-    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     endpoint: string,
-    data?: any
+    data?: any,
   ): Promise<T> {
     try {
-      const baseUrl = this.config.paper 
-        ? 'https://paper-api.alpaca.markets'
-        : 'https://api.alpaca.markets';
-      
+      const baseUrl = this.config.paper
+        ? "https://paper-api.alpaca.markets"
+        : "https://api.alpaca.markets";
+
       const response = await fetch(`${baseUrl}${endpoint}`, {
         method,
         headers: {
-          'APCA-API-KEY-ID': this.config.keyId,
-          'APCA-API-SECRET-KEY': this.config.secretKey,
-          'Content-Type': 'application/json',
+          "APCA-API-KEY-ID": this.config.keyId,
+          "APCA-API-SECRET-KEY": this.config.secretKey,
+          "Content-Type": "application/json",
         },
         body: data ? JSON.stringify(data) : undefined,
       });
 
       if (!response.ok) {
         const error = await response.json();
+
         throw {
           response: {
             status: response.status,
             data: error,
           },
-          message: error.message || 'API request failed',
+          message: error.message || "API request failed",
         };
       }
 

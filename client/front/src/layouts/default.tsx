@@ -1,5 +1,3 @@
-import { Link } from "@heroui/link";
-
 import { Navbar } from "@/components/Navbar";
 
 export default function DefaultLayout({
@@ -14,10 +12,10 @@ export default function DefaultLayout({
 
   return (
     <div className="relative flex flex-col h-screen">
-      <Navbar 
+      <Navbar
         balance={balance}
-        totalAssets={totalAssets}
         portfolioChange={portfolioChange}
+        totalAssets={totalAssets}
       />
       <main className="bg-background flex-grow overflow-y-auto">
         {children}
