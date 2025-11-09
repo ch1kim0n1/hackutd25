@@ -5,9 +5,10 @@ Provides REST API and WebSocket endpoints for the frontend
 
 import asyncio
 import logging
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+import io
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from datetime import datetime
@@ -15,6 +16,10 @@ import json
 
 from orchestrator import Orchestrator, OrchestratorState
 from core.agent_network import AgentNetwork
+from services.voice import VoiceService
+from engines.crash_simulator import CrashScenario, simulate_crash
+from services.personal_finance import PersonalFinanceService
+from services.news_search import aggregate_news, web_search
 
 
 # Configure logging
@@ -66,6 +71,8 @@ app.add_middleware(
 # Global orchestrator instance
 orchestrator: Optional[Orchestrator] = None
 orchestrator_task: Optional[asyncio.Task] = None
+voice_service: Optional[VoiceService] = None
+finance_service: Optional[PersonalFinanceService] = None
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -154,7 +161,7 @@ async def redis_to_websocket_relay():
 @app.on_event("startup")
 async def startup_event():
     """Initialize orchestrator on server startup"""
-    global orchestrator
+    global orchestrator, voice_service, finance_service
 
     logger.info("🚀 Starting APEX API Server...")
 
@@ -164,6 +171,11 @@ async def startup_event():
 
         # Start Redis→WebSocket relay
         asyncio.create_task(redis_to_websocket_relay())
+
+        # Initialize services
+        voice_service = VoiceService()
+        finance_service = PersonalFinanceService()
+        await finance_service.ensure_indexes()
 
         logger.info("✅ Server initialized successfully")
 
@@ -483,6 +495,173 @@ async def warroom_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+
+
+# ===============================
+# Voice Interface Endpoints
+# ===============================
+
+class TtsRequest(BaseModel):
+    text: str
+    voice: Optional[str] = None
+
+
+@app.post("/api/voice/transcribe")
+async def voice_transcribe(language: Optional[str] = Form(None), audio: UploadFile = File(...)):
+    if not voice_service:
+        raise HTTPException(status_code=503, detail="Voice service not initialized")
+    content = await audio.read()
+    result = await voice_service.transcribe_bytes(content, language=language)
+    return result
+
+
+@app.post("/api/voice/synthesize")
+async def voice_synthesize(req: TtsRequest):
+    if not voice_service:
+        raise HTTPException(status_code=503, detail="Voice service not initialized")
+    result = await voice_service.synthesize_speech(req.text, voice=req.voice)
+    return StreamingResponse(io.BytesIO(result["audio_bytes"]), media_type=result["mime_type"])
+
+
+# ===============================
+# Crash Simulator Endpoint
+# ===============================
+
+class CrashSimRequest(BaseModel):
+    symbol: str = "SPY"
+    start_price: float = 450.0
+    days: int = 60
+    mu_annual: float = 0.07
+    sigma_annual: float = 0.18
+    crash_day: int = 10
+    crash_severity: float = 0.25
+    recovery_speed: float = 0.05
+    recovery_days: int = 20
+    seed: Optional[int] = 42
+
+
+@app.post("/api/simulate/crash")
+async def simulate_crash_route(req: CrashSimRequest):
+    scenario = CrashScenario(
+        symbol=req.symbol,
+        start_price=req.start_price,
+        days=req.days,
+        mu_annual=req.mu_annual,
+        sigma_annual=req.sigma_annual,
+        crash_day=req.crash_day,
+        crash_severity=req.crash_severity,
+        recovery_speed=req.recovery_speed,
+        recovery_days=req.recovery_days,
+        seed=req.seed,
+    )
+    result = simulate_crash(scenario)
+    return result
+
+
+# ===============================
+# Personal Finance Endpoints
+# ===============================
+
+class FinanceAccountRequest(BaseModel):
+    user_id: str
+    name: str
+    type: str
+    institution: Optional[str] = None
+    balance: float = 0.0
+
+
+class FinanceImportRequest(BaseModel):
+    user_id: str
+    items: List[Dict[str, Any]]
+
+
+@app.post("/api/finance/accounts")
+async def finance_add_account(req: FinanceAccountRequest):
+    if not finance_service:
+        raise HTTPException(status_code=503, detail="Finance service not initialized")
+    created = await finance_service.add_account(
+        user_id=req.user_id,
+        name=req.name,
+        type=req.type,
+        institution=req.institution,
+        balance=req.balance
+    )
+    return created
+
+
+@app.get("/api/finance/accounts")
+async def finance_list_accounts(user_id: str = Query(...)):
+    if not finance_service:
+        raise HTTPException(status_code=503, detail="Finance service not initialized")
+    items = await finance_service.list_accounts(user_id=user_id)
+    return {"accounts": items, "count": len(items)}
+
+
+@app.post("/api/finance/transactions/import")
+async def finance_import_transactions(req: FinanceImportRequest):
+    if not finance_service:
+        raise HTTPException(status_code=503, detail="Finance service not initialized")
+    result = await finance_service.import_transactions(user_id=req.user_id, items=req.items)
+    return result
+
+
+@app.get("/api/finance/transactions")
+async def finance_list_transactions(
+    user_id: str = Query(...),
+    account_id: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    limit: int = Query(200)
+):
+    if not finance_service:
+        raise HTTPException(status_code=503, detail="Finance service not initialized")
+    items = await finance_service.list_transactions(
+        user_id=user_id,
+        account_id=account_id,
+        category=category,
+        start=start,
+        end=end,
+        limit=limit
+    )
+    return {"transactions": items, "count": len(items)}
+
+
+@app.get("/api/finance/summary/spending")
+async def finance_spending_summary(user_id: str = Query(...), month: Optional[str] = Query(None)):
+    if not finance_service:
+        raise HTTPException(status_code=503, detail="Finance service not initialized")
+    data = await finance_service.spending_summary_by_category(user_id=user_id, month=month)
+    return {"spending": data}
+
+
+@app.get("/api/finance/summary/cashflow")
+async def finance_cashflow_summary(user_id: str = Query(...), month: Optional[str] = Query(None)):
+    if not finance_service:
+        raise HTTPException(status_code=503, detail="Finance service not initialized")
+    data = await finance_service.cashflow_summary(user_id=user_id, month=month)
+    return data
+
+
+# ===============================
+# News & Search Endpoints
+# ===============================
+
+@app.get("/api/news")
+async def news_endpoint(
+    query: Optional[str] = Query(None, alias="q"),
+    symbols_csv: Optional[str] = Query(None, alias="symbols"),
+    max_results: int = Query(50)
+):
+    symbols = [s.strip().upper() for s in symbols_csv.split(",")] if symbols_csv else None
+    articles = await aggregate_news(query=query, symbols=symbols, max_results=max_results)
+    return {"articles": articles, "count": len(articles)}
+
+
+@app.get("/api/search")
+async def search_endpoint(q: str = Query(...), max_results: int = Query(20)):
+    results = await web_search(q, max_results=max_results)
+    return {"results": results, "count": len(results)}
 
 
 # Error handlers
