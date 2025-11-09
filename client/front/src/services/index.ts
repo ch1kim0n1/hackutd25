@@ -21,11 +21,15 @@ export { AlpacaClient } from './AlpacaClient';
 
 // Services
 export { AccountService } from './AccountService';
-export { TradingService } from './TradingService';
+export { default as SimpleTradingService } from './SimpleTradingService';
 export { AssetService } from './AssetService';
 export { MarketDataService } from './MarketDataService';
 export { WatchlistService } from './WatchlistService';
 export { ClockService } from './ClockService';
+export { default as YahooFinanceService } from './YahooFinanceService';
+export { default as EnhancedMarketService } from './EnhancedMarketService';
+export type { YahooQuote, YahooHistoricalData } from './YahooFinanceService';
+export type { MarketDataOptions, PaginatedMarketData } from './EnhancedMarketService';
 
 // Configuration
 export { getAlpacaConfig, ALPACA_URLS } from './alpaca.config';
@@ -64,13 +68,13 @@ export * from './utils';
 // ==================== UNIFIED ALPACA SERVICE ====================
 
 import { AccountService } from './AccountService';
-import { TradingService } from './TradingService';
+import SimpleTradingService from './SimpleTradingService';
 import { AssetService } from './AssetService';
 import { MarketDataService } from './MarketDataService';
 import { WatchlistService } from './WatchlistService';
 import { ClockService } from './ClockService';
 import type { AlpacaConfig } from './alpaca.config';
-import type { Account, Position, Order, Asset, Snapshot, News } from './alpaca.types';
+import type { Account, Position, Asset, Snapshot, News } from './alpaca.types';
 
 /**
  * Unified Alpaca Service
@@ -78,15 +82,13 @@ import type { Account, Position, Order, Asset, Snapshot, News } from './alpaca.t
  */
 export class AlpacaService {
   public account: AccountService;
-  public trading: TradingService;
   public assets: AssetService;
   public marketData: MarketDataService;
   public watchlists: WatchlistService;
   public clock: ClockService;
 
   constructor(config?: Partial<AlpacaConfig>) {
-    this.account = new AccountService(config);
-    this.trading = new TradingService(config);
+    this.account = new AccountService();
     this.assets = new AssetService(config);
     this.marketData = new MarketDataService(config);
     this.watchlists = new WatchlistService(config);
@@ -127,73 +129,53 @@ export class AlpacaService {
   async getDashboardData(): Promise<{
     account: Account;
     positions: Position[];
-    openOrders: Order[];
-    marketStatus: any;
     portfolioValue: number;
-    todayProfitLoss: number;
-    todayProfitLossPercent: number;
   }> {
-    const [account, positions, openOrders, marketStatus] = await Promise.all([
+    const [account, positions] = await Promise.all([
       this.account.getAccount(),
-      this.trading.getPositions(),
-      this.trading.getOrders({ status: 'open' }),
-      this.clock.getMarketStatus(),
+      SimpleTradingService.getPositions(),
     ]);
 
     const portfolioValue = parseFloat(account.portfolio_value);
-    const lastEquity = parseFloat(account.last_equity);
-    const todayProfitLoss = portfolioValue - lastEquity;
-    const todayProfitLossPercent = lastEquity > 0 ? (todayProfitLoss / lastEquity) * 100 : 0;
 
     return {
       account,
       positions,
-      openOrders,
-      marketStatus,
       portfolioValue,
-      todayProfitLoss,
-      todayProfitLossPercent,
     };
   }
 
   /**
    * Quick buy with validation
    */
-  async quickBuy(symbol: string, qty: number): Promise<Order> {
+  async quickBuy(symbol: string, qty: number): Promise<void> {
     // Validate asset
     const asset = await this.assets.getAsset(symbol);
     if (!asset.tradable) {
       throw new Error(`${symbol} is not tradable`);
     }
 
-    // Check market status
-    const canTrade = await this.account.canTrade();
-    if (!canTrade.canTrade) {
-      throw new Error(`Cannot trade: ${canTrade.reasons.join(', ')}`);
-    }
-
     // Place order
-    return await this.trading.buy(symbol, qty);
+    return await SimpleTradingService.buy(symbol, qty);
   }
 
   /**
    * Quick sell with validation
    */
-  async quickSell(symbol: string, qty: number): Promise<Order> {
+  async quickSell(symbol: string, qty: number): Promise<void> {
     // Check if we have a position
-    try {
-      const position = await this.trading.getPosition(symbol);
-      const availableQty = parseFloat(position.qty_available);
-      
-      if (qty > availableQty) {
-        throw new Error(`Insufficient quantity. Available: ${availableQty}`);
-      }
-    } catch (error) {
+    const position = await SimpleTradingService.getPosition(symbol);
+    if (!position) {
       throw new Error(`No position found for ${symbol}`);
+    }
+    
+    const availableQty = parseFloat(position.qty_available);
+    if (qty > availableQty) {
+      throw new Error(`Insufficient quantity. Available: ${availableQty}`);
     }
 
     // Place order
-    return await this.trading.sell(symbol, qty);
+    return await SimpleTradingService.sell(symbol, qty);
   }
 
   /**
@@ -204,7 +186,7 @@ export class AlpacaService {
     currentPrice: number;
     priceChange: any;
     snapshot: Snapshot;
-    position?: Position;
+    position?: Position | null;
     hasPosition: boolean;
     news: News[];
   }> {
@@ -216,15 +198,8 @@ export class AlpacaService {
 
     const priceChange = await this.marketData.getPriceChange(symbol);
     
-    let position: Position | undefined;
-    let hasPosition = false;
-    
-    try {
-      position = await this.trading.getPosition(symbol);
-      hasPosition = true;
-    } catch (error) {
-      // No position
-    }
+    const position = await SimpleTradingService.getPosition(symbol);
+    const hasPosition = position !== null;
 
     return {
       asset,

@@ -1,0 +1,16 @@
+# Python Dependencies for Stock Analysis Tool
+
+# Yahoo Finance API for fetching stock data
+yfinance>=0.2.32
+
+# Date manipulation for calculating 2-month periods
+python-dateutil>=2.8.2
+
+# JSON handling (built-in, but listed for reference)
+# json - built-in
+
+# Operating system interactions (built-in)
+# os - built-in
+
+# System-specific parameters and functions (built-in)
+# sys - built-in

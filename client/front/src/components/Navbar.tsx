@@ -49,43 +49,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       <NavbarContent justify="end" className="gap-6">
         {/* Total Assets */}
         <NavbarItem className="hidden sm:flex flex-col items-end">
-          <span className="text-xs text-default-500">Total Assets</span>
-          <span className="text-sm font-semibold text-foreground">
-            {totalAssets}
-          </span>
         </NavbarItem>
 
         {/* Portfolio Change */}
         <NavbarItem className="hidden md:flex">
-          <Chip
-            variant="flat"
-            color={portfolioChange >= 0 ? "success" : "danger"}
-            size="sm"
-            classNames={{
-              base: "font-mono",
-              content: "text-xs font-semibold"
-            }}
-          >
-            {formatChange(portfolioChange)}
-          </Chip>
         </NavbarItem>
 
         {/* Balance */}
         <NavbarItem>
-          <Chip
-            color="primary"
-            variant="flat"
-            size="lg"
-            classNames={{
-              base: "px-4 py-2",
-              content: "flex flex-col items-end gap-0"
-            }}
-          >
-            <span className="text-xs text-default-500">Balance</span>
-            <span className="text-lg font-bold font-mono">
-              {formatCurrency(balance)}
-            </span>
-          </Chip>
         </NavbarItem>
       </NavbarContent>
     </HeroNavbar>

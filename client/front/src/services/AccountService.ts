@@ -1,9 +1,9 @@
 /**
  * Account Service
- * Manages account information, portfolio, and account activities
+ * Manages account information, portfolio, and account activities using local storage
  */
 
-import { AlpacaClient } from './AlpacaClient';
+import LocalStorageService from './LocalStorageService';
 import type { 
   Account, 
   PortfolioHistory, 
@@ -11,19 +11,25 @@ import type {
   ActivityType 
 } from './alpaca.types';
 
-export class AccountService extends AlpacaClient {
+export class AccountService {
   /**
    * Get account information
    */
   async getAccount(): Promise<Account> {
-    return this.request<Account>('GET', '/v2/account');
+    return LocalStorageService.getAccount();
   }
 
   /**
    * Get account configurations
    */
   async getAccountConfigurations(): Promise<any> {
-    return this.request<any>('GET', '/v2/account/configurations');
+    // Return mock configurations
+    return {
+      dtbp_check: 'entry',
+      no_shorting: false,
+      suspend_trade: false,
+      trade_confirm_email: 'none',
+    };
   }
 
   /**
@@ -35,7 +41,8 @@ export class AccountService extends AlpacaClient {
     suspend_trade?: boolean;
     trade_confirm_email?: 'all' | 'none';
   }): Promise<any> {
-    return this.request<any>('PATCH', '/v2/account/configurations', config);
+    // Store in localStorage if needed
+    return config;
   }
 
   /**
@@ -47,15 +54,42 @@ export class AccountService extends AlpacaClient {
     date_end?: string;
     extended_hours?: boolean;
   }): Promise<PortfolioHistory> {
-    const queryParams = new URLSearchParams(params as any).toString();
-    const endpoint = `/v2/account/portfolio/history${queryParams ? `?${queryParams}` : ''}`;
-    return this.request<PortfolioHistory>('GET', endpoint);
+    // Generate mock portfolio history
+    const days = params?.period === '1D' ? 1 : params?.period === '1W' ? 7 : params?.period === '1M' ? 30 : 90;
+    const account = LocalStorageService.getAccount();
+    const baseValue = parseFloat(account.portfolio_value);
+    
+    const timestamps: number[] = [];
+    const equity: number[] = [];
+    const profit_loss: number[] = [];
+    const profit_loss_pct: number[] = [];
+    
+    for (let i = days; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      timestamps.push(date.getTime() / 1000);
+      
+      const variance = (Math.random() - 0.5) * 0.05; // ±2.5% daily variance
+      const value = baseValue * (1 + variance);
+      equity.push(value);
+      profit_loss.push(value - baseValue);
+      profit_loss_pct.push(((value - baseValue) / baseValue) * 100);
+    }
+    
+    return {
+      timestamp: timestamps,
+      equity,
+      profit_loss,
+      profit_loss_pct,
+      base_value: baseValue,
+      timeframe: params?.timeframe || '1D',
+    };
   }
 
   /**
    * Get account activities
    */
-  async getActivities(params?: {
+  async getActivities(_params?: {
     activity_types?: ActivityType | ActivityType[];
     date?: string;
     until?: string;
@@ -64,9 +98,9 @@ export class AccountService extends AlpacaClient {
     page_size?: number;
     page_token?: string;
   }): Promise<Activity[]> {
-    const queryParams = new URLSearchParams(params as any).toString();
-    const endpoint = `/v2/account/activities${queryParams ? `?${queryParams}` : ''}`;
-    return this.request<Activity[]>('GET', endpoint);
+    // Return empty activities for now
+    // You can enhance this to store activities in localStorage
+    return [];
   }
 
   /**
@@ -107,7 +141,8 @@ export class AccountService extends AlpacaClient {
         isPatternDayTrader: account.pattern_day_trader,
       };
     } catch (error) {
-      return this.handleError(error);
+      console.error('Error getting account metrics:', error);
+      throw error;
     }
   }
 
@@ -140,14 +175,18 @@ export class AccountService extends AlpacaClient {
         reasons,
       };
     } catch (error) {
-      return this.handleError(error);
+      console.error('Error checking if can trade:', error);
+      return {
+        canTrade: false,
+        reasons: ['Error checking account status'],
+      };
     }
   }
 
   /**
    * Get account buying power for a specific asset
    */
-  async getBuyingPowerForSymbol(symbol: string, price: number): Promise<{
+  async getBuyingPowerForSymbol(_symbol: string, price: number): Promise<{
     maxShares: number;
     maxNotional: number;
     buyingPower: number;
@@ -164,7 +203,8 @@ export class AccountService extends AlpacaClient {
         buyingPower,
       };
     } catch (error) {
-      return this.handleError(error);
+      console.error('Error getting buying power:', error);
+      throw error;
     }
   }
 }

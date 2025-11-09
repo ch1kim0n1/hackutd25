@@ -5,7 +5,8 @@ import { Button } from "@heroui/button";
 import { Chip } from "@heroui/chip";
 import { BalanceChart } from "@/components/BalanceChart";
 import { Asset } from "@/types";
-import { AlpacaService } from "@/services";
+import SimpleTradingService from "@/services/SimpleTradingService";
+import LocalStorageService from "@/services/LocalStorageService";
 import type { Position, Account } from "@/services/alpaca.types";
 
 interface PortfolioAsset extends Asset {
@@ -24,9 +25,6 @@ export const IndexPage = () => {
   const [account, setAccount] = useState<Account | null>(null);
   const [balanceData, setBalanceData] = useState<{ date: Date; balance: number }[]>([]);
 
-  // Initialize Alpaca service
-  const alpaca = new AlpacaService();
-
   useEffect(() => {
     loadPortfolioData();
   }, []);
@@ -36,61 +34,48 @@ export const IndexPage = () => {
       setLoading(true);
       setError(null);
 
-      // Fetch account and positions from Alpaca
-      const [accountData, positions, portfolioHistory] = await Promise.all([
-        alpaca.account.getAccount(),
-        alpaca.trading.getPositions(),
-        alpaca.account.getPortfolioHistory({
-          period: '1M',
-          timeframe: '1D',
-        }),
-      ]);
+      // Fetch account and positions from local storage
+      const accountData = LocalStorageService.getAccount();
+      const positions = await SimpleTradingService.getPositions();
 
       setAccount(accountData);
 
       // Convert positions to portfolio assets with current prices
-      const assets = await Promise.all(
-        positions.map(async (position: Position) => {
-          const currentPrice = parseFloat(position.current_price);
-          const avgEntryPrice = parseFloat(position.avg_entry_price);
-          const qty = parseFloat(position.qty);
-          const marketValue = parseFloat(position.market_value);
-          const unrealizedPL = parseFloat(position.unrealized_pl);
-          const unrealizedPLPC = parseFloat(position.unrealized_plpc);
+      const assets = positions.map((position: Position) => {
+        const currentPrice = parseFloat(position.current_price);
+        const avgEntryPrice = parseFloat(position.avg_entry_price);
+        const qty = parseFloat(position.qty);
+        const marketValue = parseFloat(position.market_value);
+        const unrealizedPL = parseFloat(position.unrealized_pl);
+        const unrealizedPLPC = parseFloat(position.unrealized_plpc);
+        const dailyChange = parseFloat(position.change_today || '0');
 
-          // Get price change for the day
-          let dailyChange = 0;
-          try {
-            const priceChange = await alpaca.marketData.getPriceChange(position.symbol);
-            dailyChange = priceChange.changePercent;
-          } catch (err) {
-            console.warn(`Could not fetch price change for ${position.symbol}`);
-          }
-
-          return {
-            symbol: position.symbol,
-            name: position.symbol, // You can fetch full name from asset service if needed
-            price: currentPrice,
-            dailyChange: dailyChange,
-            shares: qty,
-            purchasePrice: avgEntryPrice,
-            totalValue: marketValue,
-            profitLoss: unrealizedPL,
-            profitLossPercent: unrealizedPLPC,
-          } as PortfolioAsset;
-        })
-      );
+        return {
+          symbol: position.symbol,
+          name: position.symbol,
+          price: currentPrice,
+          dailyChange: dailyChange,
+          shares: qty,
+          purchasePrice: avgEntryPrice,
+          totalValue: marketValue,
+          profitLoss: unrealizedPL,
+          profitLossPercent: unrealizedPLPC,
+        } as PortfolioAsset;
+      });
 
       setPortfolioAssets(assets);
 
-      // Convert portfolio history to balance data
-      if (portfolioHistory.equity && portfolioHistory.timestamp) {
-        const chartData = portfolioHistory.timestamp.map((timestamp, index) => ({
-          date: new Date(timestamp * 1000),
-          balance: portfolioHistory.equity[index],
-        }));
-        setBalanceData(chartData);
-      }
+      // Generate mock balance data for chart (last 30 days)
+      const currentBalance = parseFloat(accountData.portfolio_value);
+      const chartData = Array.from({ length: 30 }, (_, i) => {
+        const date = new Date();
+        date.setDate(date.getDate() - (29 - i));
+        // Simple mock: slight random variation around current balance
+        const variation = (Math.random() - 0.5) * 0.05; // ±5%
+        const balance = currentBalance * (1 + variation * (i / 30));
+        return { date, balance };
+      });
+      setBalanceData(chartData);
     } catch (err: any) {
       console.error('Error loading portfolio data:', err);
       setError(err.message || 'Failed to load portfolio data');

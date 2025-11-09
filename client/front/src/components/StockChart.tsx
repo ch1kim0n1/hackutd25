@@ -1,6 +1,7 @@
 import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Chip } from "@heroui/chip";
-import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell } from 'recharts';
+import ReactApexChart from 'react-apexcharts';
+import { ApexOptions } from 'apexcharts';
 
 interface StockDataPoint {
   date: Date;
@@ -19,78 +20,6 @@ interface StockChartProps {
   width?: string;
 }
 
-const CustomTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload[0]) {
-    const data = payload[0].payload;
-    const isGreen = data.close >= data.open;
-    
-    return (
-      <div className="bg-gray-900 border-2 border-purple-500 rounded-lg p-3 shadow-xl">
-        <p className="text-xs text-gray-300 mb-2 font-semibold">{new Date(data.date).toLocaleDateString()}</p>
-        <div className="space-y-1 text-xs font-mono">
-          <p className="text-white">Open: <span className="font-bold text-blue-400">${data.open.toFixed(2)}</span></p>
-          <p className="text-white">High: <span className="font-bold text-green-400">${data.high.toFixed(2)}</span></p>
-          <p className="text-white">Low: <span className="font-bold text-red-400">${data.low.toFixed(2)}</span></p>
-          <p className="text-white">Close: <span className={`font-bold ${isGreen ? 'text-green-400' : 'text-red-400'}`}>${data.close.toFixed(2)}</span></p>
-          {data.volume && (
-            <p className="text-white">Volume: <span className="font-bold text-purple-400">{(data.volume / 1000000).toFixed(2)}M</span></p>
-          )}
-          <p className={`text-xs mt-2 ${isGreen ? 'text-green-400' : 'text-red-400'}`}>
-            {isGreen ? '▲' : '▼'} {Math.abs(((data.close - data.open) / data.open) * 100).toFixed(2)}%
-          </p>
-        </div>
-      </div>
-    );
-  }
-  return null;
-};
-
-// Custom candlestick renderer
-const CandlestickBar = (props: any) => {
-  const { x, y, width, height, payload } = props;
-  
-  if (!payload || !payload.open || !payload.close) return null;
-  
-  const isGreen = payload.close >= payload.open;
-  const color = isGreen ? '#10b981' : '#ef4444';
-  
-  // Calculate body dimensions
-  const bodyTop = Math.min(payload.open, payload.close);
-  const bodyHeight = Math.abs(payload.close - payload.open);
-  
-  // Calculate wick dimensions  
-  const wickTop = payload.high;
-  
-  // Chart scale (this is approximate, Recharts handles actual scaling)
-  const priceRange = payload.high - payload.low;
-  const wickX = x + width / 2;
-  
-  return (
-    <g>
-      {/* High-Low Wick */}
-      <line
-        x1={wickX}
-        y1={y}
-        x2={wickX}
-        y2={y + height}
-        stroke={color}
-        strokeWidth={1.5}
-      />
-      {/* Candle Body */}
-      <rect
-        x={x + width * 0.2}
-        y={y + (height * ((wickTop - bodyTop) / priceRange))}
-        width={width * 0.6}
-        height={Math.max(height * (bodyHeight / priceRange), 1)}
-        fill={color}
-        stroke={color}
-        strokeWidth={1}
-        rx={1}
-      />
-    </g>
-  );
-};
-
 export const StockChart = ({ data, symbol, currentPrice, priceChange, width = "100%" }: StockChartProps) => {
   const formatChange = (change?: number) => {
     if (change === undefined) return '';
@@ -98,13 +27,202 @@ export const StockChart = ({ data, symbol, currentPrice, priceChange, width = "1
     return `${sign}${change.toFixed(2)}%`;
   };
 
-  // Prepare chart data
-  const chartData = data.map(d => ({
-    ...d,
-    timestamp: new Date(d.date).getTime(),
-    range: [d.low, d.high],
-    isGreen: d.close >= d.open,
+  // Prepare data for ApexCharts candlestick format
+  const candlestickData = data.map(d => ({
+    x: new Date(d.date).getTime(),
+    y: [d.open, d.high, d.low, d.close]
   }));
+
+  const lineData = data.map(d => ({
+    x: new Date(d.date).getTime(),
+    y: d.close
+  }));
+
+  const volumeData = data.map(d => ({
+    x: new Date(d.date).getTime(),
+    y: d.volume || 0
+  }));
+
+  const chartOptions: ApexOptions = {
+    chart: {
+      type: 'candlestick',
+      height: 350,
+      background: 'transparent',
+      toolbar: {
+        show: false
+      },
+      zoom: {
+        enabled: true
+      }
+    },
+    theme: {
+      mode: 'dark'
+    },
+    plotOptions: {
+      candlestick: {
+        colors: {
+          upward: '#10b981',
+          downward: '#ef4444'
+        },
+        wick: {
+          useFillColor: true
+        }
+      },
+      bar: {
+        columnWidth: '95%'
+      }
+    },
+    stroke: {
+      width: [0, 2],
+      curve: 'smooth'
+    },
+    xaxis: {
+      type: 'datetime',
+      labels: {
+        style: {
+          colors: '#9ca3af',
+          fontSize: '10px'
+        },
+        datetimeFormatter: {
+          year: 'yyyy',
+          month: "MMM 'yy",
+          day: 'dd MMM',
+          hour: 'HH:mm'
+        }
+      },
+      axisBorder: {
+        color: '#374151'
+      },
+      axisTicks: {
+        color: '#374151'
+      }
+    },
+    yaxis: {
+      tooltip: {
+        enabled: true
+      },
+      labels: {
+        style: {
+          colors: '#9ca3af',
+          fontSize: '10px'
+        },
+        formatter: (val) => `$${val.toFixed(2)}`
+      }
+    },
+    grid: {
+      borderColor: '#374151',
+      strokeDashArray: 3,
+      xaxis: {
+        lines: {
+          show: false
+        }
+      }
+    },
+    tooltip: {
+      theme: 'dark',
+      custom: function({ seriesIndex, dataPointIndex, w }) {
+        const o = w.globals.seriesCandleO[seriesIndex][dataPointIndex];
+        const h = w.globals.seriesCandleH[seriesIndex][dataPointIndex];
+        const l = w.globals.seriesCandleL[seriesIndex][dataPointIndex];
+        const c = w.globals.seriesCandleC[seriesIndex][dataPointIndex];
+        const isGreen = c >= o;
+        const change = ((c - o) / o * 100).toFixed(2);
+        const date = new Date(w.globals.seriesX[seriesIndex][dataPointIndex]);
+        
+        return `
+          <div class="bg-gray-900 border-2 border-purple-500 rounded-lg p-3 shadow-xl">
+            <p class="text-xs text-gray-300 mb-2 font-semibold">${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+            <div class="space-y-1 text-xs font-mono">
+              <p class="text-white">Open: <span class="font-bold text-blue-400">$${o.toFixed(2)}</span></p>
+              <p class="text-white">High: <span class="font-bold text-green-400">$${h.toFixed(2)}</span></p>
+              <p class="text-white">Low: <span class="font-bold text-red-400">$${l.toFixed(2)}</span></p>
+              <p class="text-white">Close: <span class="font-bold ${isGreen ? 'text-green-400' : 'text-red-400'}">$${c.toFixed(2)}</span></p>
+              <p class="text-xs mt-2 ${isGreen ? 'text-green-400' : 'text-red-400'}">
+                ${isGreen ? '▲' : '▼'} ${Math.abs(parseFloat(change))}%
+              </p>
+            </div>
+          </div>
+        `;
+      }
+    }
+  };
+
+  const volumeOptions: ApexOptions = {
+    chart: {
+      type: 'bar',
+      height: 160,
+      background: 'transparent',
+      toolbar: {
+        show: false
+      }
+    },
+    theme: {
+      mode: 'dark'
+    },
+    plotOptions: {
+      bar: {
+        colors: {
+          ranges: [{
+            from: 0,
+            to: Number.MAX_VALUE,
+            color: '#6366f1'
+          }]
+        },
+        columnWidth: '80%',
+      }
+    },
+    dataLabels: {
+      enabled: false
+    },
+    xaxis: {
+      type: 'datetime',
+      labels: {
+        show: false
+      },
+      axisBorder: {
+        show: false
+      },
+      axisTicks: {
+        show: false
+      }
+    },
+    yaxis: {
+      labels: {
+        style: {
+          colors: '#9ca3af',
+          fontSize: '9px'
+        },
+        formatter: (val) => (val / 1000000).toFixed(1) + 'M'
+      }
+    },
+    grid: {
+      show: false
+    },
+    tooltip: {
+      theme: 'dark',
+      x: {
+        format: 'dd MMM yyyy'
+      },
+      y: {
+        formatter: (val) => (val / 1000000).toFixed(2) + 'M shares'
+      }
+    }
+  };
+
+  const series = [{
+    name: symbol,
+    type: 'candlestick',
+    data: candlestickData
+  }, {
+    name: 'Trend',
+    type: 'line',
+    data: lineData
+  }];
+
+  const volumeSeries = [{
+    name: 'Volume',
+    data: volumeData
+  }];
 
   return (
     <Card className="shadow-lg border border-divider h-full flex flex-col bg-gradient-to-br from-gray-900 via-gray-900 to-black" style={{ width }}>
@@ -123,64 +241,26 @@ export const StockChart = ({ data, symbol, currentPrice, priceChange, width = "1
       </CardHeader>
       <CardBody className="px-4 pb-4 flex-1 min-h-0">
         {data.length > 0 ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="volumeGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.5} />
-                  <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.05} />
-                </linearGradient>
-              </defs>
-              
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.2} vertical={false} />
-              
-              <XAxis 
-                dataKey="timestamp" 
-                tickFormatter={(ts) => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} 
-                stroke="#6b7280" 
-                style={{ fontSize: '10px', fontWeight: '400' }}
-                tick={{ fill: '#9ca3af' }}
-                axisLine={{ stroke: '#374151' }}
+          <div className="h-full flex flex-col">
+            <div className="flex-1">
+              <ReactApexChart 
+                options={chartOptions} 
+                series={series} 
+                type="candlestick" 
+                height="100%" 
               />
-              
-              <YAxis 
-                domain={['dataMin - 2', 'dataMax + 2']}
-                tickFormatter={(val) => `$${val.toFixed(0)}`} 
-                stroke="#6b7280" 
-                style={{ fontSize: '10px', fontWeight: '400' }}
-                tick={{ fill: '#9ca3af' }}
-                axisLine={{ stroke: '#374151' }}
-                orientation="right"
-              />
-              
-              <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#6366f1', strokeWidth: 1, strokeDasharray: '3 3' }} />
-              
-              {/* Price bars (candlesticks) */}
-              <Bar 
-                dataKey="high" 
-                shape={<CandlestickBar />}
-                isAnimationActive={false}
-              >
-                {chartData.map((_entry, index) => (
-                  <Cell key={`cell-${index}`} />
-                ))}
-              </Bar>
-              
-              {/* Volume bars at bottom - 20% of chart height */}
-              <Bar 
-                dataKey="volume"
-                yAxisId="volume"
-                maxBarSize={4}
-              >
-                {chartData.map((entry, index) => (
-                  <Cell 
-                    key={`vol-${index}`} 
-                    fill={entry.isGreen ? '#10b98180' : '#ef444480'} 
-                  />
-                ))}
-              </Bar>
-            </ComposedChart>
-          </ResponsiveContainer>
+            </div>
+            {data.some(d => d.volume) && (
+              <div className="h-32">
+                <ReactApexChart 
+                  options={volumeOptions} 
+                  series={volumeSeries} 
+                  type="bar" 
+                  height="100%" 
+                />
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex items-center justify-center h-full">
             <p className="text-gray-500">No chart data available</p>
