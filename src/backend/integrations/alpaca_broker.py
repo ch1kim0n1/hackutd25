@@ -140,6 +140,28 @@ class AlpacaBroker:
             }
         except Exception as e:
             return {"error": str(e)}
+    
+    async def get_orders(self, status: str = 'all', limit: int = 50) -> List[Dict]:
+        try:
+            orders = self.api.list_orders(status=status, limit=limit)
+            return [
+                {
+                    "id": order.id,
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "qty": order.qty,
+                    "filled_qty": order.filled_qty,
+                    "type": order.type,
+                    "status": order.status,
+                    "limit_price": order.limit_price,
+                    "filled_avg_price": order.filled_avg_price,
+                    "created_at": order.created_at,
+                    "submitted_at": order.submitted_at,
+                }
+                for order in orders
+            ]
+        except Exception as e:
+            return {"error": str(e)}
 
     async def cancel_order(self, order_id: str) -> bool:
         try:
