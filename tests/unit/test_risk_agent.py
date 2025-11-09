@@ -79,7 +79,8 @@ class TestValueAtRisk:
         percentile = 1 - confidence_level
         
         assert 0 < percentile < 1
-        assert percentile == 0.05
+        # Use approximate comparison for floating-point values
+        assert abs(percentile - 0.05) < 1e-10
     
     def test_var_calculation_99_percentile(self):
         """Test VaR at 99% confidence level."""
@@ -88,7 +89,8 @@ class TestValueAtRisk:
         confidence_level = 0.99
         percentile = 1 - confidence_level
         
-        assert percentile == 0.01
+        # Use approximate comparison for floating-point values
+        assert abs(percentile - 0.01) < 1e-10
     
     def test_conditional_var(self):
         """Test Conditional VaR (CVaR / Expected Shortfall)."""

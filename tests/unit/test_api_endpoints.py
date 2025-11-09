@@ -236,7 +236,8 @@ class TestPortfolioCalculations:
         cash = 20000
         
         total = sum(pos["qty"] * pos["price"] for pos in positions.values()) + cash
-        assert total == 100000
+        # Calculate: (100 * 450) + (50 * 150) + 20000 = 45000 + 7500 + 20000 = 72500
+        assert total == 72500.0
     
     def test_performance_calculation(self):
         """Test calculation of portfolio performance."""

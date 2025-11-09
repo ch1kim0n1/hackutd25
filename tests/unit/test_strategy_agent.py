@@ -98,13 +98,13 @@ class TestRebalancing:
             "GLD": {"weight": 0.10, "target": 0.10},  # On target
         }
         
-        # Calculate drift for each position
+        # Calculate drift for each position (use approximate comparison for floats)
         for asset, data in current_portfolio.items():
             drift = abs(data["weight"] - data["target"])
             if asset == "SPY":
-                assert drift == 0.15  # Over by 15%
+                assert abs(drift - 0.15) < 1e-10  # Over by 15%
             elif asset == "TLT":
-                assert drift == 0.15  # Under by 15%
+                assert abs(drift - 0.15) < 1e-10  # Under by 15%
     
     def test_tax_loss_harvesting(self):
         """Test tax loss harvesting opportunities."""
