@@ -29,12 +29,15 @@ python-dotenv==1.0.0
 asyncio-mqtt==0.13.0
 aiofiles==23.2.1
 
-# Web Scraping (for Market Agent)
+# Web Scraping & News Aggregation
 beautifulsoup4==4.12.2
 requests==2.31.0
 aiohttp==3.9.0
 feedparser==6.0.11
 duckduckgo-search==6.3.3
+ddgs==1.0.6           # DuckDuckGo Simple client
+python-dateutil==2.8.2  # For robust date parsing
+pytz==2023.3.post1     # For timezone handling
 
 # Optional: Plaid Integration (for Personal Finance Dashboard)
 # plaid-python==14.0.0
