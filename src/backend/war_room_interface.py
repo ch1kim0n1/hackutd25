@@ -23,6 +23,9 @@ class AgentMessage:
     message_type: str  # debate, alert, decision, user_input
     importance: str  # low, medium, high, critical
     metadata: Optional[Dict] = None
+    thread_id: Optional[str] = None  # For debate threading
+    parent_message_id: Optional[str] = None  # References previous message in thread
+    tags: Optional[List[str]] = None  # Search tags
 
     def to_dict(self):
         return asdict(self)
@@ -46,6 +49,11 @@ class WarRoomInterface:
         # Message storage
         self.messages: deque = deque(maxlen=max_messages)
         self.message_counter = 0
+
+        # Debate threading
+        self.active_threads: Dict[str, List[str]] = {}  # thread_id -> [message_ids]
+        self.thread_counter = 0
+        self.current_thread_id = None
 
         # Agent profiles for UI display
         self.agent_profiles = {
@@ -204,7 +212,104 @@ class WarRoomInterface:
         ]
         return [msg.to_dict() for msg in matches[-limit:]]
 
-    def get_agent_stats(self) -> Dict:
+    # ========================================
+    # DEBATE THREADING
+    # ========================================
+
+    def start_debate_thread(self, topic: str) -> str:
+        """Start a new debate thread on a specific topic"""
+        self.thread_counter += 1
+        thread_id = f"thread_{self.thread_counter}_{datetime.now().timestamp()}"
+        self.active_threads[thread_id] = []
+        self.current_thread_id = thread_id
+        
+        self._add_system_message(
+            f"🧵 Started debate thread: {topic}",
+            importance="medium"
+        )
+        return thread_id
+
+    def add_to_thread(self, message_id: str, thread_id: Optional[str] = None):
+        """Add message to a debate thread"""
+        if thread_id is None:
+            thread_id = self.current_thread_id
+        
+        if thread_id in self.active_threads:
+            self.active_threads[thread_id].append(message_id)
+
+    def close_debate_thread(self, thread_id: Optional[str] = None) -> Dict:
+        """Close a debate thread and return summary"""
+        if thread_id is None:
+            thread_id = self.current_thread_id
+        
+        if thread_id not in self.active_threads:
+            return {"error": "Thread not found"}
+        
+        message_ids = self.active_threads[thread_id]
+        thread_messages = [
+            msg for msg in self.messages
+            if msg.id in message_ids
+        ]
+        
+        # Summarize thread
+        agents_involved = set(msg.from_agent for msg in thread_messages)
+        importance_levels = [msg.importance for msg in thread_messages]
+        
+        summary = {
+            "thread_id": thread_id,
+            "message_count": len(thread_messages),
+            "agents_involved": list(agents_involved),
+            "max_importance": max(importance_levels) if importance_levels else "low",
+            "start_time": thread_messages[0].timestamp if thread_messages else None,
+            "end_time": thread_messages[-1].timestamp if thread_messages else None,
+            "messages": [msg.to_dict() for msg in thread_messages]
+        }
+        
+        del self.active_threads[thread_id]
+        if thread_id == self.current_thread_id:
+            self.current_thread_id = None
+        
+        self._add_system_message(
+            f"✅ Closed debate thread. {len(thread_messages)} messages, {len(agents_involved)} agents.",
+            importance="medium"
+        )
+        
+        return summary
+
+    def get_thread_messages(self, thread_id: str) -> List[Dict]:
+        """Get all messages in a specific thread"""
+        if thread_id not in self.active_threads:
+            return []
+        
+        message_ids = self.active_threads[thread_id]
+        thread_messages = [
+            msg for msg in self.messages
+            if msg.id in message_ids
+        ]
+        
+        return [msg.to_dict() for msg in thread_messages]
+
+    def get_active_threads(self) -> Dict[str, Dict]:
+        """Get summary of all active threads"""
+        threads_summary = {}
+        
+        for thread_id, message_ids in self.active_threads.items():
+            thread_messages = [
+                msg for msg in self.messages
+                if msg.id in message_ids
+            ]
+            
+            if thread_messages:
+                threads_summary[thread_id] = {
+                    "message_count": len(thread_messages),
+                    "agents": list(set(msg.from_agent for msg in thread_messages)),
+                    "importance": max(msg.importance for msg in thread_messages),
+                    "last_update": thread_messages[-1].timestamp,
+                    "snippet": thread_messages[-1].message[:50] + "..."
+                }
+        
+        return threads_summary
+
         """Get statistics on agent activity"""
         stats = {}
 

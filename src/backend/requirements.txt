@@ -22,6 +22,10 @@ numpy==1.26.2
 redis==5.0.1
 sqlalchemy==2.0.23
 motor==3.6.0
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+alembic==1.13.1
+pgvector==0.2.4
 
 # Utilities
 pydantic==2.5.0
@@ -39,10 +43,20 @@ ddgs==1.0.6           # DuckDuckGo Simple client
 python-dateutil==2.8.2  # For robust date parsing
 pytz==2023.3.post1     # For timezone handling
 
-# Optional: Plaid Integration (for Personal Finance Dashboard)
-# plaid-python==14.0.0
+# Plaid Integration (for Personal Finance Dashboard)
+plaid-python==20.0.0
+
+# RAG System
+chromadb==0.4.22
+sentence-transformers==2.3.1
 
 # Voice (optional providers)
 faster-whisper==0.10.1
 edge-tts==6.1.12
+
+# Security
+pyotp==2.9.0              # TOTP 2FA
+cryptography==41.0.7      # Encryption
+passlib[bcrypt]==1.7.4    # Password hashing
+PyJWT==2.8.0              # JWT tokens
 

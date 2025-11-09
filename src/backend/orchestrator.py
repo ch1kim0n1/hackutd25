@@ -1,12 +1,14 @@
 """
-APEX Multi-Agent Orchestrator - WITH DELIBERATION PHASE
+APEX Multi-Agent Orchestrator - WITH DELIBERATION PHASE & DEBATE ENGINE
 Coordinates agents with a new "reasoning roundtable" where agents discuss strategy.
+Includes formal debate mechanism with consensus voting and conflict resolution.
 """
 
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Tuple, Any
 from datetime import datetime
 from openai import OpenAI
 import time
+from services.agent_debate_engine import AgentDebateEngine, AgentStance
 
 
 class AgentOrchestrator:
@@ -62,9 +64,16 @@ class AgentOrchestrator:
         self.logging_enabled = enable_logging
         self.require_user_approval = require_user_approval
         
+        # Debate engine for formal voting and consensus
+        self.debate_engine = AgentDebateEngine(
+            agent_names=["market_agent", "strategy_agent", "risk_agent"],
+            max_rounds=max_deliberation_rounds
+        )
+        
         # Conversation history
         self.initial_analysis = {}
         self.deliberation_history = []
+        self.debate_transcript = []
         
         # User control
         self.user_interrupted = False
@@ -919,3 +928,144 @@ Be concise and actionable."""
                 self.log(f"   • {change}", "DELIBERATION")
         else:
             self.log("📊 No allocation changes - original confirmed", "DELIBERATION")
+
+    # ========================================
+    # FORMAL DEBATE & VOTING
+    # ========================================
+
+    def run_formal_debate_on_decision(
+        self,
+        topic: str,
+        market_report: Dict,
+        strategy: Dict,
+        validation: Dict,
+        user_profile: Dict
+    ) -> Dict[str, Any]:
+        """
+        Run formal debate with voting and consensus.
+        
+        Args:
+            topic: What to debate (e.g., "execute_trade", "rebalance_portfolio")
+            market_report: Market conditions
+            strategy: Proposed strategy
+            validation: Risk assessment
+            user_profile: User preferences
+        
+        Returns:
+            Debate result with consensus decision
+        """
+        self.log(f"\n🗳️  FORMAL DEBATE: {topic}", "DELIBERATION")
+        self.log("="*60)
+        
+        # Start debate
+        debate_round = self.debate_engine.start_debate(topic)
+        
+        # Get agent positions
+        # Market Agent: Focus on market conditions
+        market_position, market_confidence = self._get_market_agent_position(
+            market_report, strategy, user_profile
+        )
+        self.debate_engine.record_position(
+            "market_agent",
+            market_position,
+            f"Market conditions: {market_report.get('market_condition', 'unknown')}. VIX: {market_report.get('market_data', {}).get('vix', 0):.1f}",
+            market_confidence
+        )
+        self.log(f"Market Agent: {market_position.value.upper()} ({market_confidence:.0%})", "DELIBERATION")
+        
+        # Strategy Agent: Focus on strategy fit
+        strategy_position, strategy_confidence = self._get_strategy_agent_position(
+            strategy, user_profile
+        )
+        self.debate_engine.record_position(
+            "strategy_agent",
+            strategy_position,
+            f"Strategy confidence: {strategy.get('confidence', 0.5):.1%}. Fit: {strategy.get('strategy_summary', 'unknown')}",
+            strategy_confidence
+        )
+        self.log(f"Strategy Agent: {strategy_position.value.upper()} ({strategy_confidence:.0%})", "DELIBERATION")
+        
+        # Risk Agent: Focus on risk assessment
+        risk_position, risk_confidence = self._get_risk_agent_position(
+            validation, user_profile
+        )
+        self.debate_engine.record_position(
+            "risk_agent",
+            risk_position,
+            f"Risk approved: {validation.get('approved', False)}. Recommendation: {validation.get('recommendation', 'unknown')}",
+            risk_confidence
+        )
+        self.log(f"Risk Agent: {risk_position.value.upper()} ({risk_confidence:.0%})", "DELIBERATION")
+        
+        # Check consensus
+        consensus_reached, consensus_data = self.debate_engine.check_consensus()
+        
+        self.log(f"\nConsensus Level: {consensus_data['consensus_level']:.0%}", "DELIBERATION")
+        self.log(f"Decision: {consensus_data['decision'].upper()}", "DELIBERATION")
+        
+        # Store transcript
+        self.debate_transcript.append(consensus_data)
+        
+        return {
+            "topic": topic,
+            "consensus_reached": consensus_reached,
+            "consensus_level": consensus_data["consensus_level"],
+            "decision": consensus_data["decision"],
+            "positions": {
+                "market": market_position.value,
+                "strategy": strategy_position.value,
+                "risk": risk_position.value
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+
+    def _get_market_agent_position(
+        self,
+        market_report: Dict,
+        strategy: Dict,
+        user_profile: Dict
+    ) -> Tuple[AgentStance, float]:
+        """Determine Market Agent's position on a decision"""
+        vix = market_report.get('market_data', {}).get('vix', 20)
+        market_condition = market_report.get('market_condition', 'normal')
+        
+        # Market Agent is conservative when VIX is high
+        if vix > 30:  # High volatility
+            confidence = min(0.9, vix / 50)
+            return AgentStance.DISAGREE, confidence
+        elif vix > 20:  # Moderate volatility
+            confidence = 0.7
+            return AgentStance.NEUTRAL, confidence
+        else:  # Low volatility
+            confidence = 0.8
+            return AgentStance.AGREE, confidence
+
+    def _get_strategy_agent_position(
+        self,
+        strategy: Dict,
+        user_profile: Dict
+    ) -> Tuple[AgentStance, float]:
+        """Determine Strategy Agent's position"""
+        confidence = strategy.get('confidence', 0.5)
+        
+        if confidence > 0.8:
+            return AgentStance.AGREE, confidence
+        elif confidence > 0.6:
+            return AgentStance.NEUTRAL, confidence
+        else:
+            return AgentStance.DISAGREE, 1.0 - confidence
+
+    def _get_risk_agent_position(
+        self,
+        validation: Dict,
+        user_profile: Dict
+    ) -> Tuple[AgentStance, float]:
+        """Determine Risk Agent's position"""
+        approved = validation.get('approved', False)
+        confidence = validation.get('confidence', 0.5)
+        
+        if approved:
+            return AgentStance.AGREE, confidence
+        else:
+            return AgentStance.DISAGREE, confidence
+

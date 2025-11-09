@@ -25,6 +25,10 @@ from services.news_search import aggregate_news, web_search
 from services.mock_plaid import mock_plaid_data
 from services.news_aggregator import news_aggregator
 from integrations.alpaca_broker import AlpacaBroker
+from war_room_interface import WarRoomInterface
+from services.rag.chroma_service import ChromaService
+from services.rag.query_engine import RAGQueryEngine
+from services.finance_adapter import FinanceAdapter
 
 
 # Configure logging
@@ -105,6 +109,10 @@ finance_service: Optional[PersonalFinanceService] = None
 crash_engine: Optional[CrashScenarioEngine] = None
 crash_simulation_task: Optional[asyncio.Task] = None
 alpaca_broker: Optional[AlpacaBroker] = None
+war_room: Optional[WarRoomInterface] = None
+chroma_service: Optional[ChromaService] = None
+rag_engine: Optional[RAGQueryEngine] = None
+finance_adapter: Optional[FinanceAdapter] = None
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -654,19 +662,29 @@ async def place_trade(trade: TradeRequest):
 
 @app.get("/api/finance/accounts")
 async def get_finance_accounts():
-    accounts = mock_plaid_data.get_accounts()
+    if not finance_adapter:
+        accounts = mock_plaid_data.get_accounts()
+    else:
+        accounts = await finance_adapter.get_accounts()
     return {"accounts": accounts, "count": len(accounts)}
 
 
 @app.get("/api/finance/transactions")
 async def get_finance_transactions(days: int = 90):
-    transactions = mock_plaid_data.get_transactions(days)
+    if not finance_adapter:
+        transactions = mock_plaid_data.get_transactions(days)
+    else:
+        transactions = await finance_adapter.get_transactions(days)
     return {"transactions": transactions, "count": len(transactions)}
 
 
 @app.get("/api/finance/subscriptions")
 async def get_subscriptions():
-    subscriptions = mock_plaid_data.get_subscriptions()
+    if not finance_adapter:
+        subscriptions = mock_plaid_data.get_subscriptions()
+    else:
+        subscriptions = await finance_adapter.get_subscriptions()
+    
     total_annual = sum(sub['annual_cost'] for sub in subscriptions)
     return {
         "subscriptions": subscriptions,
@@ -678,17 +696,32 @@ async def get_subscriptions():
 
 @app.get("/api/finance/net-worth")
 async def get_net_worth():
-    return mock_plaid_data.get_net_worth()
+    if not finance_adapter:
+        return mock_plaid_data.get_net_worth()
+    return finance_adapter.get_net_worth()
 
 
 @app.get("/api/finance/cash-flow")
 async def get_cash_flow(days: int = 30):
-    return mock_plaid_data.get_cash_flow(days)
+    if not finance_adapter:
+        return mock_plaid_data.get_cash_flow(days)
+    return finance_adapter.get_cash_flow(days)
 
 
 @app.get("/api/finance/health-score")
 async def get_health_score():
-    return mock_plaid_data.calculate_health_score()
+    if not finance_adapter:
+        return mock_plaid_data.calculate_health_score()
+    return finance_adapter.calculate_health_score()
+
+
+@app.get("/api/finance/adapter-status")
+async def get_finance_status():
+    """Get status of finance adapter (real Plaid or mock)"""
+    if not finance_adapter:
+        return {"status": "not_initialized", "mode": "unknown"}
+    return finance_adapter.get_status()
+
 
 
 @app.get("/api/news")
@@ -836,6 +869,10 @@ class TtsRequest(BaseModel):
     voice: Optional[str] = None
 
 
+class VoiceCommandRequest(BaseModel):
+    text: str
+
+
 @app.post("/api/voice/transcribe")
 async def voice_transcribe(language: Optional[str] = Form(None), audio: UploadFile = File(...)):
     if not voice_service:
@@ -851,6 +888,313 @@ async def voice_synthesize(req: TtsRequest):
         raise HTTPException(status_code=503, detail="Voice service not initialized")
     result = await voice_service.synthesize_speech(req.text, voice=req.voice)
     return StreamingResponse(io.BytesIO(result["audio_bytes"]), media_type=result["mime_type"])
+
+
+@app.post("/api/voice/detect-activity")
+async def voice_detect_activity(audio: UploadFile = File(...)):
+    """Detect if audio contains speech (Voice Activity Detection)"""
+    if not voice_service:
+        raise HTTPException(status_code=503, detail="Voice service not initialized")
+    content = await audio.read()
+    result = voice_service.detect_voice_activity(content)
+    return result
+
+
+@app.post("/api/voice/denoise")
+async def voice_denoise(audio: UploadFile = File(...)):
+    """Reduce background noise from audio"""
+    if not voice_service:
+        raise HTTPException(status_code=503, detail="Voice service not initialized")
+    content = await audio.read()
+    denoised = await voice_service.reduce_noise(content)
+    return StreamingResponse(io.BytesIO(denoised), media_type="audio/wav")
+
+
+@app.post("/api/voice/parse-command")
+async def voice_parse_command(req: VoiceCommandRequest):
+    """Parse voice input for recognized trading/portfolio/goal commands"""
+    if not voice_service:
+        raise HTTPException(status_code=503, detail="Voice service not initialized")
+    result = voice_service.parse_voice_commands(req.text)
+    return result
+
+
+# =======================================
+# WAR ROOM ENDPOINTS
+# =======================================
+
+@app.get("/api/war-room/messages")
+async def get_war_room_messages(limit: int = Query(50, ge=1, le=200)):
+    """Get recent War Room messages"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    return {"messages": war_room.get_recent_messages(limit)}
+
+
+@app.get("/api/war-room/critical")
+async def get_critical_messages(limit: int = Query(20, ge=1, le=100)):
+    """Get critical/high-priority messages"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    return {"messages": war_room.get_critical_messages(limit)}
+
+
+@app.get("/api/war-room/search")
+async def search_war_room(q: str, limit: int = Query(50, ge=1, le=200)):
+    """Search War Room messages"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    if not q:
+        raise HTTPException(status_code=400, detail="Query parameter required")
+    return {"results": war_room.search_messages(q, limit)}
+
+
+@app.get("/api/war-room/agent/{agent_name}")
+async def get_agent_messages(agent_name: str, limit: int = Query(50, ge=1, le=200)):
+    """Get messages from specific agent"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    return {"messages": war_room.get_messages_by_agent(agent_name, limit)}
+
+
+@app.get("/api/war-room/stats")
+async def get_war_room_stats():
+    """Get War Room statistics"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    return {"stats": war_room.get_agent_stats()}
+
+
+@app.get("/api/war-room/summary")
+async def get_debate_summary():
+    """Get current debate summary and decision points"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    return war_room.get_debate_summary()
+
+
+@app.post("/api/war-room/thread/start")
+async def start_debate_thread(body: Dict[str, str]):
+    """Start a new debate thread"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    topic = body.get("topic", "General Debate")
+    thread_id = war_room.start_debate_thread(topic)
+    return {"thread_id": thread_id, "topic": topic}
+
+
+@app.get("/api/war-room/thread/{thread_id}")
+async def get_thread(thread_id: str):
+    """Get messages from a specific thread"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    return {"messages": war_room.get_thread_messages(thread_id)}
+
+
+@app.post("/api/war-room/thread/{thread_id}/close")
+async def close_thread(thread_id: str):
+    """Close a debate thread and get summary"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    summary = war_room.close_debate_thread(thread_id)
+    return summary
+
+
+@app.get("/api/war-room/threads")
+async def get_active_threads():
+    """Get all active debate threads"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    return {"threads": war_room.get_active_threads()}
+
+
+@app.post("/api/war-room/export")
+async def export_war_room():
+    """Export War Room conversation to JSON"""
+    if not war_room:
+        raise HTTPException(status_code=503, detail="War Room not initialized")
+    filename = war_room.export_conversation()
+    return {"filename": filename, "message": f"Exported {len(war_room.messages)} messages"}
+
+
+# =======================================
+# RAG SYSTEM ENDPOINTS
+# =======================================
+
+class RAGQueryRequest(BaseModel):
+    """RAG query request"""
+    query: str
+    limit: int = 5
+    include_sources: bool = True
+
+
+@app.post("/api/rag/search")
+async def rag_search(req: RAGQueryRequest):
+    """Semantic search across historical market data"""
+    if not rag_engine or not chroma_service:
+        raise HTTPException(status_code=503, detail="RAG system not initialized")
+    
+    try:
+        # Classify intent
+        intent = rag_engine.classify_intent(req.query)
+        
+        # Extract entities
+        symbol = rag_engine.extract_symbol(req.query)
+        date_str = rag_engine.extract_date(req.query)
+        
+        # Search based on intent
+        results = []
+        
+        if intent.value == "price_movement" and symbol:
+            # Search price movement collection
+            query_results = chroma_service.collections["price_movements"].query(
+                query_texts=[req.query],
+                n_results=req.limit
+            )
+            results = query_results["documents"][0] if query_results["documents"] else []
+            
+        elif intent.value == "market_event":
+            # Search market events
+            query_results = chroma_service.collections["market_events"].query(
+                query_texts=[req.query],
+                n_results=req.limit
+            )
+            results = query_results["documents"][0] if query_results["documents"] else []
+            
+        elif intent.value == "company_info" and symbol:
+            # Search company info
+            query_results = chroma_service.collections["company_info"].query(
+                query_texts=[f"{symbol} company information"],
+                n_results=req.limit
+            )
+            results = query_results["documents"][0] if query_results["documents"] else []
+            
+        elif intent.value == "news_search":
+            # Search news archive
+            query_results = chroma_service.collections["news_archive"].query(
+                query_texts=[req.query],
+                n_results=req.limit
+            )
+            results = query_results["documents"][0] if query_results["documents"] else []
+            
+        else:
+            # General search across all collections
+            all_results = []
+            for collection_name, collection in chroma_service.collections.items():
+                try:
+                    query_results = collection.query(
+                        query_texts=[req.query],
+                        n_results=max(1, req.limit // 4)
+                    )
+                    if query_results["documents"]:
+                        all_results.extend(query_results["documents"][0])
+                except Exception as e:
+                    logger.warning(f"Error querying {collection_name}: {e}")
+            results = all_results[:req.limit]
+        
+        return {
+            "query": req.query,
+            "intent": intent.value,
+            "symbol": symbol,
+            "date": date_str,
+            "results": results,
+            "count": len(results),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"RAG search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"RAG search failed: {str(e)}")
+
+
+@app.post("/api/rag/index/market-event")
+async def add_market_event(body: Dict[str, Any]):
+    """Add a market event to the RAG index"""
+    if not chroma_service:
+        raise HTTPException(status_code=503, detail="RAG system not initialized")
+    
+    try:
+        success = chroma_service.add_market_event(
+            event_id=body.get("event_id", f"event_{datetime.now().timestamp()}"),
+            title=body.get("title"),
+            description=body.get("description"),
+            date=body.get("date", datetime.now().isoformat()),
+            event_type=body.get("event_type", "general"),
+            affected_symbols=body.get("affected_symbols", []),
+            metadata=body.get("metadata")
+        )
+        return {"success": success, "message": "Market event indexed"}
+    except Exception as e:
+        logger.error(f"Error adding market event: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add event: {str(e)}")
+
+
+@app.post("/api/rag/index/news")
+async def add_news_article(body: Dict[str, Any]):
+    """Add a news article to the RAG index"""
+    if not chroma_service:
+        raise HTTPException(status_code=503, detail="RAG system not initialized")
+    
+    try:
+        success = chroma_service.add_news_article(
+            article_id=body.get("article_id", f"article_{datetime.now().timestamp()}"),
+            title=body.get("title"),
+            content=body.get("content"),
+            published_date=body.get("published_date", datetime.now().isoformat()),
+            source=body.get("source", "unknown"),
+            symbols=body.get("symbols", []),
+            sentiment=body.get("sentiment", "neutral"),
+            metadata=body.get("metadata")
+        )
+        return {"success": success, "message": "News article indexed"}
+    except Exception as e:
+        logger.error(f"Error adding news article: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add article: {str(e)}")
+
+
+@app.post("/api/rag/index/company")
+async def add_company_info(body: Dict[str, Any]):
+    """Add company information to the RAG index"""
+    if not chroma_service:
+        raise HTTPException(status_code=503, detail="RAG system not initialized")
+    
+    try:
+        success = chroma_service.add_company_info(
+            info_id=body.get("info_id", f"company_{datetime.now().timestamp()}"),
+            symbol=body.get("symbol"),
+            company_name=body.get("company_name"),
+            description=body.get("description"),
+            sector=body.get("sector"),
+            industry=body.get("industry"),
+            metadata=body.get("metadata")
+        )
+        return {"success": success, "message": "Company info indexed"}
+    except Exception as e:
+        logger.error(f"Error adding company info: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add company: {str(e)}")
+
+
+@app.post("/api/rag/index/price-movement")
+async def add_price_movement(body: Dict[str, Any]):
+    """Add price movement explanation to the RAG index"""
+    if not chroma_service:
+        raise HTTPException(status_code=503, detail="RAG system not initialized")
+    
+    try:
+        success = chroma_service.add_price_movement(
+            movement_id=body.get("movement_id", f"movement_{datetime.now().timestamp()}"),
+            symbol=body.get("symbol"),
+            date=body.get("date"),
+            price_change_percent=body.get("price_change_percent"),
+            explanation=body.get("explanation"),
+            contributing_factors=body.get("contributing_factors", []),
+            metadata=body.get("metadata")
+        )
+        return {"success": success, "message": "Price movement indexed"}
+    except Exception as e:
+        logger.error(f"Error adding price movement: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add movement: {str(e)}")
+
 
 
 class ScenarioSimRequest(BaseModel):
