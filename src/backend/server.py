@@ -18,8 +18,13 @@ from orchestrator import Orchestrator, OrchestratorState
 from core.agent_network import AgentNetwork
 from services.voice import VoiceService
 from engines.crash_simulator import CrashScenario, simulate_crash
+from engines.crash_scenario_engine import CrashScenarioEngine
+from services.historical_data import HistoricalDataLoader
 from services.personal_finance import PersonalFinanceService
 from services.news_search import aggregate_news, web_search
+from services.mock_plaid import mock_plaid_data
+from services.news_aggregator import news_aggregator
+from integrations.alpaca_broker import AlpacaBroker
 
 
 # Configure logging
@@ -97,6 +102,9 @@ orchestrator: Optional[Orchestrator] = None
 orchestrator_task: Optional[asyncio.Task] = None
 voice_service: Optional[VoiceService] = None
 finance_service: Optional[PersonalFinanceService] = None
+crash_engine: Optional[CrashScenarioEngine] = None
+crash_simulation_task: Optional[asyncio.Task] = None
+alpaca_broker: Optional[AlpacaBroker] = None
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -193,13 +201,17 @@ async def startup_event():
         orchestrator = Orchestrator(redis_url="redis://localhost:6379")
         await orchestrator.initialize()
 
-        # Start Redis→WebSocket relay
         asyncio.create_task(redis_to_websocket_relay())
 
-        # Initialize services
         voice_service = VoiceService()
         finance_service = PersonalFinanceService()
         await finance_service.ensure_indexes()
+        
+        alpaca_broker = AlpacaBroker(paper=True)
+        await alpaca_broker.initialize()
+        
+        data_loader = HistoricalDataLoader()
+        crash_engine = CrashScenarioEngine(data_loader)
 
         logger.info("✅ Server initialized successfully")
 
@@ -377,6 +389,70 @@ async def stop_orchestrator():
     }
 
 
+@app.post("/orchestrator/pause")
+async def pause_war_room_orchestrator():
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+    
+    await orchestrator.pause()
+    
+    await manager.broadcast({
+        "type": "system",
+        "from": "system",
+        "to": "all",
+        "content": "⏸️ User interjection detected - Agents paused",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {"message": "Orchestrator paused", "status": "paused"}
+
+
+@app.post("/orchestrator/resume")
+async def resume_war_room_orchestrator():
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+    
+    await orchestrator.resume()
+    
+    await manager.broadcast({
+        "type": "system",
+        "from": "system",
+        "to": "all",
+        "content": "▶️ Agents resuming with updated context",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {"message": "Orchestrator resumed", "status": "running"}
+
+
+@app.post("/user-input")
+async def submit_user_voice_input(input_data: UserInput):
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+    
+    await manager.broadcast({
+        "type": "user_message",
+        "from": "user",
+        "to": "all",
+        "content": input_data.message or "",
+        "timestamp": datetime.now().isoformat(),
+        "data": input_data.data or {}
+    })
+    
+    await orchestrator.network.publish(
+        topic="user_input",
+        message={
+            "type": "user_input",
+            "action": input_data.action,
+            "message": input_data.message,
+            "data": input_data.data or {},
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+    
+    return {"message": "User input received", "status": "success"}
+
+
 @app.post("/api/pause")
 async def pause_orchestrator():
     """Pause the orchestrator (for user interjection)"""
@@ -443,31 +519,188 @@ async def submit_user_input(input_data: UserInput):
 
 @app.get("/api/portfolio")
 async def get_portfolio():
-    """Get current portfolio state"""
-    # TODO: Implement actual portfolio retrieval from database/broker
-    # For now, return mock data
-
-    return {
-        "total_value": 10000.00,
-        "cash": 5000.00,
-        "positions": [
-            {
-                "symbol": "AAPL",
-                "shares": 10,
-                "current_price": 180.50,
-                "value": 1805.00,
-                "cost_basis": 175.00,
-                "gain_loss": 55.00,
-                "gain_loss_pct": 3.14
-            }
-        ],
-        "performance": {
-            "day_change": 125.50,
-            "day_change_pct": 1.27,
-            "total_gain_loss": 500.00,
-            "total_gain_loss_pct": 5.26
+    if not alpaca_broker:
+        raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
+    
+    try:
+        account = await alpaca_broker.get_account()
+        positions = await alpaca_broker.get_positions()
+        
+        total_pl = sum(float(pos.get('unrealized_pl', 0)) for pos in positions) if isinstance(positions, list) else 0
+        total_value = account.get('portfolio_value', 0)
+        initial_value = float(total_value) - total_pl
+        
+        return {
+            "total_value": total_value,
+            "day_return": total_pl / initial_value * 100 if initial_value > 0 else 0,
+            "total_return": (float(total_value) - 100000) / 100000 * 100,
         }
+    except Exception as e:
+        logger.error(f"Error fetching portfolio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/account")
+async def get_account():
+    if not alpaca_broker:
+        raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
+    
+    try:
+        account = await alpaca_broker.get_account()
+        return {
+            "portfolio_value": account.get('portfolio_value', 0),
+            "cash": account.get('cash', 0),
+            "buying_power": account.get('buying_power', 0),
+            "equity": account.get('equity', 0),
+            "status": "ACTIVE"
+        }
+    except Exception as e:
+        logger.error(f"Error fetching account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/positions")
+async def get_positions():
+    if not alpaca_broker:
+        raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
+    
+    try:
+        positions = await alpaca_broker.get_positions()
+        if isinstance(positions, dict) and 'error' in positions:
+            return []
+        
+        return [
+            {
+                "symbol": pos['symbol'],
+                "qty": pos['qty'],
+                "avg_entry_price": pos.get('avg_fill_price', 0),
+                "current_price": pos.get('current_price', 0),
+                "market_value": pos.get('market_value', 0),
+                "unrealized_pl": pos.get('unrealized_pl', 0),
+                "unrealized_plpc": pos.get('unrealized_plpc', 0),
+                "side": "long"
+            }
+            for pos in positions
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching positions: {e}")
+        return []
+
+
+@app.get("/api/orders")
+async def get_orders():
+    if not alpaca_broker:
+        raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
+    
+    try:
+        orders = await alpaca_broker.get_orders()
+        if isinstance(orders, dict) and 'error' in orders:
+            return []
+        return orders
+    except Exception as e:
+        logger.error(f"Error fetching orders: {e}")
+        return []
+
+
+class TradeRequest(BaseModel):
+    symbol: str
+    side: str
+    qty: float
+    type: str = 'market'
+    time_in_force: str = 'day'
+    limit_price: Optional[float] = None
+
+
+@app.post("/api/trade")
+async def place_trade(trade: TradeRequest):
+    if not alpaca_broker:
+        raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
+    
+    try:
+        if trade.side == 'buy':
+            result = await alpaca_broker.buy(
+                symbol=trade.symbol,
+                qty=int(trade.qty),
+                order_type=trade.type,
+                limit_price=trade.limit_price
+            )
+        else:
+            result = await alpaca_broker.sell(
+                symbol=trade.symbol,
+                qty=int(trade.qty),
+                order_type=trade.type,
+                limit_price=trade.limit_price
+            )
+        
+        if 'error' in result:
+            raise HTTPException(status_code=400, detail=result['error'])
+        
+        await manager.broadcast({
+            "type": "executor",
+            "from": "executor",
+            "to": "all",
+            "content": f"⚡ Order placed: {trade.side.upper()} {trade.qty} {trade.symbol} @ {trade.type.upper()}",
+            "timestamp": datetime.now().isoformat(),
+            "data": {"order": result}
+        })
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error placing trade: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/finance/accounts")
+async def get_finance_accounts():
+    accounts = mock_plaid_data.get_accounts()
+    return {"accounts": accounts, "count": len(accounts)}
+
+
+@app.get("/api/finance/transactions")
+async def get_finance_transactions(days: int = 90):
+    transactions = mock_plaid_data.get_transactions(days)
+    return {"transactions": transactions, "count": len(transactions)}
+
+
+@app.get("/api/finance/subscriptions")
+async def get_subscriptions():
+    subscriptions = mock_plaid_data.get_subscriptions()
+    total_annual = sum(sub['annual_cost'] for sub in subscriptions)
+    return {
+        "subscriptions": subscriptions,
+        "count": len(subscriptions),
+        "total_monthly": total_annual / 12,
+        "total_annual": total_annual
     }
+
+
+@app.get("/api/finance/net-worth")
+async def get_net_worth():
+    return mock_plaid_data.get_net_worth()
+
+
+@app.get("/api/finance/cash-flow")
+async def get_cash_flow(days: int = 30):
+    return mock_plaid_data.get_cash_flow(days)
+
+
+@app.get("/api/finance/health-score")
+async def get_health_score():
+    return mock_plaid_data.calculate_health_score()
+
+
+@app.get("/api/news")
+async def get_news(limit: int = 10):
+    headlines = news_aggregator.get_headlines(limit)
+    return {"news": headlines, "count": len(headlines)}
+
+
+@app.get("/api/news/search")
+async def search_news(q: str):
+    results = news_aggregator.search_news(q)
+    return {"news": results, "count": len(results)}
 
 
 @app.get("/api/history")
@@ -618,6 +851,138 @@ async def voice_synthesize(req: TtsRequest):
         raise HTTPException(status_code=503, detail="Voice service not initialized")
     result = await voice_service.synthesize_speech(req.text, voice=req.voice)
     return StreamingResponse(io.BytesIO(result["audio_bytes"]), media_type=result["mime_type"])
+
+
+class ScenarioSimRequest(BaseModel):
+    scenario: str
+    speed_multiplier: int = 100
+    risk_tolerance: str = 'moderate'
+
+
+@app.get("/crash-simulator/scenarios")
+async def get_available_scenarios():
+    if not crash_engine:
+        raise HTTPException(status_code=503, detail="Crash simulator not initialized")
+    
+    return {
+        "scenarios": list(crash_engine.loader.scenarios.keys()),
+        "details": crash_engine.loader.scenarios
+    }
+
+
+@app.post("/crash-simulator/load/{scenario_name}")
+async def load_crash_scenario(scenario_name: str):
+    if not crash_engine:
+        raise HTTPException(status_code=503, detail="Crash simulator not initialized")
+    
+    try:
+        scenario = crash_engine.load_scenario(scenario_name)
+        
+        await manager.broadcast({
+            "type": "system",
+            "from": "system",
+            "to": "all",
+            "content": f"📊 Loaded {scenario['data']['scenario']['name']} - {scenario['total_days']} trading days",
+            "timestamp": datetime.now().isoformat(),
+            "data": {"scenario": scenario_name}
+        })
+        
+        return {
+            "scenario": scenario_name,
+            "total_days": scenario['total_days'],
+            "symbols": scenario['symbols']
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/crash-simulator/start")
+async def start_crash_simulation(req: ScenarioSimRequest):
+    global crash_simulation_task
+    
+    if not crash_engine:
+        raise HTTPException(status_code=503, detail="Crash simulator not initialized")
+    
+    if crash_simulation_task and not crash_simulation_task.done():
+        raise HTTPException(status_code=400, detail="Simulation already running")
+    
+    async def simulation_callback(data):
+        await manager.broadcast({
+            "type": "market",
+            "from": "market",
+            "to": "all",
+            "content": f"📊 Day {data['day']}: APEX ${data['apex_value']:,.0f} ({data['apex_return']:+.1f}%) vs Buy&Hold ${data['buy_hold_value']:,.0f} ({data['buy_hold_return']:+.1f}%)",
+            "timestamp": datetime.now().isoformat(),
+            "data": data
+        })
+        
+        if data['day'] % 20 == 0:
+            await manager.broadcast({
+                "type": "strategy",
+                "from": "strategy",
+                "to": "all",
+                "content": f"🧠 Rebalancing: High volatility detected. Shifting to defensive allocation.",
+                "timestamp": datetime.now().isoformat()
+            })
+    
+    async def run_sim():
+        try:
+            await manager.broadcast({
+                "type": "system",
+                "from": "system",
+                "to": "all",
+                "content": f"🚀 Starting crash simulation at {req.speed_multiplier}x speed",
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            result = await crash_engine.run_simulation(
+                speed_multiplier=req.speed_multiplier,
+                message_callback=simulation_callback
+            )
+            
+            await manager.broadcast({
+                "type": "system",
+                "from": "system",
+                "to": "all",
+                "content": f"✅ Simulation complete! APEX: {result['apex_return']:+.1f}% | Buy&Hold: {result['buy_hold_return']:+.1f}% | Outperformance: {result['outperformance']:+.1f}%",
+                "timestamp": datetime.now().isoformat(),
+                "data": result
+            })
+        except Exception as e:
+            logger.error(f"Simulation error: {e}")
+    
+    crash_simulation_task = asyncio.create_task(run_sim())
+    
+    return {"message": "Simulation started", "status": "running"}
+
+
+@app.post("/crash-simulator/stop")
+async def stop_crash_simulation():
+    if not crash_engine:
+        raise HTTPException(status_code=503, detail="Crash simulator not initialized")
+    
+    crash_engine.stop_simulation()
+    
+    await manager.broadcast({
+        "type": "system",
+        "from": "system",
+        "to": "all",
+        "content": "⏹️ Crash simulation stopped",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {"message": "Simulation stopped", "status": "stopped"}
+
+
+@app.get("/crash-simulator/comparison")
+async def get_crash_comparison():
+    if not crash_engine:
+        raise HTTPException(status_code=503, detail="Crash simulator not initialized")
+    
+    if not crash_engine.current_scenario:
+        raise HTTPException(status_code=400, detail="No scenario loaded")
+    
+    return crash_engine.get_comparison_data()
 
 
 # ===============================

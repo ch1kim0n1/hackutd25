@@ -1,11 +1,11 @@
 import React, { useState, useCallback } from 'react';
 import Header from '../components/layout/Header';
-import Sidebar from '../components/layout/Sidebar';
 import Card from '../components/ui/Card';
 import useWebSocket from '../hooks/useWebSocket';
 import MessageList from '../components/WarRoom/MessageList';
 import ConnectionStatus from '../components/WarRoom/ConnectionStatus';
 import WarRoomControls from '../components/WarRoom/WarRoomControls';
+import VoicePanel from '../components/VoiceInput/VoicePanel';
 
 const WarRoomPage = () => {
   const { messages, isConnected, error, sendMessage, clearMessages } = useWebSocket();
@@ -51,20 +51,65 @@ const WarRoomPage = () => {
     }
   }, []);
 
-  return (
-    <div className="flex">
-      <Sidebar />
-      <div className="flex-1 flex flex-col h-screen">
-        <Header />
-        <main className="flex-1 p-6 bg-gray-100 overflow-hidden">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold">🎭 Agent War Room</h2>
-            <ConnectionStatus isConnected={isConnected} error={error} />
-          </div>
+  const handleVoiceInput = useCallback(async (voiceMessage) => {
+    if (voiceMessage.pausedAgents) {
+      try {
+        await fetch('http://localhost:8000/orchestrator/pause', {
+          method: 'POST',
+        });
+      } catch (err) {
+        console.error('Error pausing orchestrator:', err);
+      }
+    }
 
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-180px)]">
-            {/* Main War Room Display (75%) */}
-            <div className="lg:col-span-3 h-full">
+    sendMessage({
+      type: 'user_message',
+      from: 'user',
+      to: 'all',
+      content: voiceMessage.content,
+      timestamp: voiceMessage.timestamp,
+      data: { voice: true, holdOn: voiceMessage.pausedAgents },
+    });
+
+    try {
+      await fetch('http://localhost:8000/user-input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: voiceMessage.pausedAgents ? 'interject' : 'comment',
+          message: voiceMessage.content,
+          data: { voice: true },
+        }),
+      });
+
+      if (voiceMessage.pausedAgents) {
+        setTimeout(async () => {
+          try {
+            await fetch('http://localhost:8000/orchestrator/resume', {
+              method: 'POST',
+            });
+          } catch (err) {
+            console.error('Error resuming orchestrator:', err);
+          }
+        }, 1000);
+      }
+    } catch (err) {
+      console.error('Error sending user input:', err);
+    }
+  }, [sendMessage]);
+
+  return (
+    <div className="flex flex-col h-screen">
+      <Header />
+      <main className="flex-1 p-6 bg-gray-100 overflow-hidden">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-bold">� Agent War Room</h2>
+          <ConnectionStatus isConnected={isConnected} error={error} />
+        </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-180px)]">
+            {/* Main War Room Display (60%) */}
+            <div className="lg:col-span-2 h-full">
               <Card className="h-full flex flex-col">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-bold text-lg">Live Agent Conversations</h3>
@@ -87,8 +132,8 @@ const WarRoomPage = () => {
               </Card>
             </div>
 
-            {/* Controls Panel (25%) */}
-            <div className="lg:col-span-1 h-full">
+            {/* Right Panel (40%) - Controls + Voice */}
+            <div className="lg:col-span-1 h-full overflow-y-auto space-y-4">
               <WarRoomControls
                 onStartOrchestrator={handleStartOrchestrator}
                 onStopOrchestrator={handleStopOrchestrator}
@@ -96,8 +141,12 @@ const WarRoomPage = () => {
                 isConnected={isConnected}
               />
 
-              {/* Agent Legend */}
-              <Card className="mt-4 p-4">
+              <VoicePanel
+                onVoiceInput={handleVoiceInput}
+                isConnected={isConnected}
+              />
+
+              <Card className="p-4">
                 <h4 className="font-bold text-sm mb-3">Agent Legend</h4>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center gap-2">
@@ -124,12 +173,11 @@ const WarRoomPage = () => {
                     <span>👤</span>
                     <span className="text-indigo-600">You</span>
                   </div>
-                </div>
-              </Card>
-            </div>
+              </div>
+            </Card>
           </div>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   );
 };
