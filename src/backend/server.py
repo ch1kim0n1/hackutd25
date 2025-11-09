@@ -1,17 +1,20 @@
 """
 APEX FastAPI Server
-Provides REST API and WebSocket endpoints for the frontend
+Provides REST API and WebSocket endpoints with security hardening
 """
 
 import asyncio
 import logging
 import io
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form, Query
+import os
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form, Query, Depends, status, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from datetime import datetime
+from decimal import Decimal
 import json
 
 from orchestrator import Orchestrator, OrchestratorState
@@ -19,7 +22,6 @@ from core.agent_network import AgentNetwork
 from services.voice import VoiceService
 from engines.crash_simulator import CrashScenario, simulate_crash
 from engines.crash_scenario_engine import CrashScenarioEngine
-from services.historical_data import HistoricalDataLoader
 from services.personal_finance import PersonalFinanceService
 from services.news_search import aggregate_news, web_search
 from services.mock_plaid import mock_plaid_data
@@ -29,17 +31,26 @@ from war_room_interface import WarRoomInterface
 from services.rag.chroma_service import ChromaService
 from services.rag.query_engine import RAGQueryEngine
 from services.finance_adapter import FinanceAdapter
+from services.logging_service import logger as structured_logger, RequestLogger
+from middleware.exception_handler import setup_exception_handlers
+from api.auth import get_current_user, login_user, refresh_access_token, logout_user
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Initialize logging
 logger = logging.getLogger(__name__)
 
-
 # Pydantic models for API requests/responses
+class LoginRequest(BaseModel):
+    """Login request model"""
+    username: str
+    password: str
+
+
+class RefreshTokenRequest(BaseModel):
+    """Refresh token request"""
+    refresh_token: str
+
+
 class UserInput(BaseModel):
     """User input/feedback model"""
     action: str  # "approve", "reject", "pause", "resume", "comment"
@@ -61,44 +72,42 @@ class StatusResponse(BaseModel):
     decision_count: int
 
 
-# Create FastAPI app
+# Create FastAPI app with enhanced security
 app = FastAPI(
     title="APEX API",
     description="Multi-Agent Financial Investment System API",
-    version="1.0.0"
+    version="2.0.0"
 )
 
+# Setup global exception handlers
+setup_exception_handlers(app)
 
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for Phase 1 testing"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0",
-        "phase": "Phase 1 - Foundation"
-    }
+# HTTPS enforcement (enable in production)
+if os.getenv("FORCE_HTTPS", "false").lower() == "true":
+    app.add_middleware(HTTPSRedirectMiddleware)
 
+# CORS middleware - restrict to frontend origins
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",  # Vite dev server
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    frontend_url,
+]
 
-@app.get("/")
-async def root():
-    """Root endpoint with API info"""
-    return {
-        "name": "APEX API",
-        "description": "Multi-Agent Financial Investment System",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health"
-    }
+if os.getenv("ENVIRONMENT") == "development":
+    # Allow all in development (careful!)
+    allowed_origins = ["*"]
 
-# CORS middleware for Electron frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to specific origins
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["X-Correlation-ID"],
+    max_age=600,  # Cache CORS preflight for 10 minutes
 )
 
 # Global orchestrator instance
@@ -206,6 +215,18 @@ async def startup_event():
     logger.info("🚀 Starting APEX API Server...")
 
     try:
+        # Initialize database schema and run migrations
+        from services.postgres_db import init_db
+        logger.info("📊 Initializing database schema...")
+        await init_db()
+        logger.info("✅ Database initialized")
+        
+        # Seed test data if needed
+        from services.seed_data import seed_test_data
+        logger.info("🌱 Seeding test data...")
+        await seed_test_data()
+        logger.info("✅ Test data seeded")
+        
         orchestrator = Orchestrator(redis_url="redis://localhost:6379")
         await orchestrator.initialize()
 
@@ -241,6 +262,10 @@ async def shutdown_event():
     if orchestrator:
         await orchestrator.stop()
 
+    # Close database connections
+    from services.postgres_db import close_db
+    await close_db()
+    
     logger.info("✅ Server shutdown complete")
 
 
@@ -270,6 +295,114 @@ async def get_status():
         error_count=status["error_count"],
         decision_count=status["decision_count"]
     )
+
+
+# ============================================================================
+# Authentication Endpoints
+# ============================================================================
+
+@app.post("/auth/login")
+async def login(request: LoginRequest):
+    """
+    Authenticate user and return access + refresh tokens
+    
+    Request body:
+        {
+            "username": "user@example.com",
+            "password": "secure_password"
+        }
+    
+    Returns:
+        {
+            "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+            "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+            "token_type": "bearer",
+            "expires_in": 900
+        }
+    """
+    from services.auth import login_user
+    return await login_user(request.username, request.password)
+
+
+@app.post("/auth/refresh")
+async def refresh(request: RefreshTokenRequest):
+    """
+    Refresh access token using refresh token
+    
+    Request body:
+        {
+            "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+        }
+    
+    Returns:
+        {
+            "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+            "token_type": "bearer",
+            "expires_in": 900
+        }
+    """
+    from services.auth import refresh_access_token
+    return await refresh_access_token(request.refresh_token)
+
+
+@app.post("/auth/logout")
+async def logout(background_tasks: BackgroundTasks, request: Request):
+    """
+    Logout user by revoking their access token
+    
+    Header:
+        Authorization: Bearer <access_token>
+    
+    Returns:
+        {
+            "message": "Successfully logged out"
+        }
+    """
+    from services.auth import logout_user
+    
+    auth_header = request.headers.get("authorization", "")
+    
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+    
+    token_str = auth_header[7:]
+    await logout_user(token_str)
+    
+    return {"message": "Successfully logged out"}
+
+
+@app.get("/auth/me")
+async def get_me(request: Request):
+    """
+    Get current authenticated user info
+    
+    Header:
+        Authorization: Bearer <access_token>
+    
+    Returns:
+        {
+            "id": "uuid",
+            "username": "user@example.com",
+            "email": "user@example.com",
+            "created_at": "2024-01-01T00:00:00Z"
+        }
+    """
+    from services.auth import get_current_user
+    
+    auth_header = request.headers.get("authorization", "")
+    
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+    
+    token_str = auth_header[7:]
+    user = await get_current_user(token_str)
+    
+    return {
+        "id": str(user.id),
+        "username": user.username,
+        "email": user.email,
+        "created_at": user.created_at.isoformat()
+    }
 
 
 @app.post("/api/start")
@@ -526,11 +659,28 @@ async def submit_user_input(input_data: UserInput):
 
 
 @app.get("/api/portfolio")
-async def get_portfolio():
+async def get_portfolio(request: Request, auth_data: dict = Depends(lambda: None)):
+    """
+    Get user's portfolio information.
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
     if not alpaca_broker:
         raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
     
     try:
+        RequestLogger.log_request(
+            structured_logger,
+            "get_portfolio",
+            user_id=str(user_id)
+        )
+        
         account = await alpaca_broker.get_account()
         positions = await alpaca_broker.get_positions()
         
@@ -544,7 +694,7 @@ async def get_portfolio():
             "total_return": (float(total_value) - 100000) / 100000 * 100,
         }
     except Exception as e:
-        logger.error(f"Error fetching portfolio: {e}")
+        logger.error(f"Error fetching portfolio for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -620,11 +770,30 @@ class TradeRequest(BaseModel):
 
 
 @app.post("/api/trade")
-async def place_trade(trade: TradeRequest):
+async def place_trade(request: Request, trade: TradeRequest, auth_data: dict = Depends(lambda: None)):
+    """
+    Place a buy or sell order.
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
     if not alpaca_broker:
         raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
     
     try:
+        # Log trade request with user context
+        RequestLogger.log_request(
+            structured_logger,
+            "place_trade",
+            user_id=str(user_id),
+            data={"symbol": trade.symbol, "qty": trade.qty, "side": trade.side}
+        )
+        
         if trade.side == 'buy':
             result = await alpaca_broker.buy(
                 symbol=trade.symbol,
@@ -656,12 +825,20 @@ async def place_trade(trade: TradeRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error placing trade: {e}")
+        logger.error(f"Error placing trade for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/finance/accounts")
-async def get_finance_accounts():
+async def get_finance_accounts(request: Request, auth_data: dict = Depends(lambda: None)):
+    """Get user's financial accounts (requires authentication)"""
+    from middleware.auth import get_current_user_from_request
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    RequestLogger.log_request(structured_logger, "get_finance_accounts", user_id=str(user_id))
+    
     if not finance_adapter:
         accounts = mock_plaid_data.get_accounts()
     else:
@@ -670,7 +847,15 @@ async def get_finance_accounts():
 
 
 @app.get("/api/finance/transactions")
-async def get_finance_transactions(days: int = 90):
+async def get_finance_transactions(request: Request, days: int = 90, auth_data: dict = Depends(lambda: None)):
+    """Get user's financial transactions (requires authentication)"""
+    from middleware.auth import get_current_user_from_request
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    RequestLogger.log_request(structured_logger, "get_finance_transactions", user_id=str(user_id))
+    
     if not finance_adapter:
         transactions = mock_plaid_data.get_transactions(days)
     else:
@@ -679,7 +864,15 @@ async def get_finance_transactions(days: int = 90):
 
 
 @app.get("/api/finance/subscriptions")
-async def get_subscriptions():
+async def get_subscriptions(request: Request, auth_data: dict = Depends(lambda: None)):
+    """Get user's subscriptions (requires authentication)"""
+    from middleware.auth import get_current_user_from_request
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    RequestLogger.log_request(structured_logger, "get_subscriptions", user_id=str(user_id))
+    
     if not finance_adapter:
         subscriptions = mock_plaid_data.get_subscriptions()
     else:
@@ -695,21 +888,45 @@ async def get_subscriptions():
 
 
 @app.get("/api/finance/net-worth")
-async def get_net_worth():
+async def get_net_worth(request: Request, auth_data: dict = Depends(lambda: None)):
+    """Get user's net worth (requires authentication)"""
+    from middleware.auth import get_current_user_from_request
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    RequestLogger.log_request(structured_logger, "get_net_worth", user_id=str(user_id))
+    
     if not finance_adapter:
         return mock_plaid_data.get_net_worth()
     return finance_adapter.get_net_worth()
 
 
 @app.get("/api/finance/cash-flow")
-async def get_cash_flow(days: int = 30):
+async def get_cash_flow(request: Request, days: int = 30, auth_data: dict = Depends(lambda: None)):
+    """Get user's cash flow (requires authentication)"""
+    from middleware.auth import get_current_user_from_request
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    RequestLogger.log_request(structured_logger, "get_cash_flow", user_id=str(user_id))
+    
     if not finance_adapter:
         return mock_plaid_data.get_cash_flow(days)
     return finance_adapter.get_cash_flow(days)
 
 
 @app.get("/api/finance/health-score")
-async def get_health_score():
+async def get_health_score(request: Request, auth_data: dict = Depends(lambda: None)):
+    """Get user's financial health score (requires authentication)"""
+    from middleware.auth import get_current_user_from_request
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    RequestLogger.log_request(structured_logger, "get_health_score", user_id=str(user_id))
+    
     if not finance_adapter:
         return mock_plaid_data.calculate_health_score()
     return finance_adapter.calculate_health_score()
@@ -722,6 +939,562 @@ async def get_finance_status():
         return {"status": "not_initialized", "mode": "unknown"}
     return finance_adapter.get_status()
 
+
+# ============================================================================
+# Plaid Integration Endpoints
+# ============================================================================
+
+@app.post("/api/plaid/create-link-token")
+async def create_plaid_link_token(
+    request: Request,
+    redirect_uri: Optional[str] = None,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Create a Plaid Link token for account connection flow.
+    
+    Returns a link_token that can be used to launch Plaid Link UI.
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.plaid_integration import PlaidIntegration
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        plaid = PlaidIntegration()
+        token_data = await plaid.create_link_token(str(user_id), redirect_uri)
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "create_plaid_link_token",
+            user_id=str(user_id)
+        )
+        
+        return token_data
+        
+    except Exception as e:
+        logger.error(f"Failed to create Plaid link token: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create link token")
+
+
+@app.post("/api/plaid/exchange-token")
+async def exchange_plaid_token(
+    request: Request,
+    public_token: str,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Exchange Plaid public token for access token and save credentials.
+    
+    Called after user connects account in Plaid Link.
+    Stores encrypted access token in user's account.
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.plaid_integration import PlaidIntegration
+    from services.postgres_db import AsyncSessionLocal
+    from services.dao.user_dao import UserDAO
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        plaid = PlaidIntegration()
+        access_token = await plaid.exchange_public_token(str(user_id), public_token)
+        
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Token exchange failed")
+        
+        # Store encrypted access token
+        async with AsyncSessionLocal() as db:
+            await UserDAO.set_encrypted_credential(
+                db,
+                user_id,
+                "plaid_token",
+                access_token
+            )
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "exchange_plaid_token",
+            user_id=str(user_id)
+        )
+        
+        return {
+            "status": "success",
+            "message": "Plaid account connected successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token exchange error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to exchange token")
+
+
+@app.get("/api/plaid/accounts")
+async def get_plaid_accounts(
+    request: Request,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Retrieve linked bank accounts from Plaid.
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.plaid_integration import PlaidIntegration
+    from services.postgres_db import AsyncSessionLocal
+    from services.dao.user_dao import UserDAO
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        # Get stored Plaid access token
+        async with AsyncSessionLocal() as db:
+            plaid_token = await UserDAO.get_encrypted_credential(
+                db,
+                user_id,
+                "plaid_token"
+            )
+        
+        if not plaid_token:
+            return {
+                "accounts": [],
+                "message": "No Plaid account connected. Use /api/plaid/create-link-token first."
+            }
+        
+        plaid = PlaidIntegration()
+        accounts = await plaid.get_accounts(str(user_id), plaid_token)
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "get_plaid_accounts",
+            user_id=str(user_id),
+            data={"account_count": len(accounts)}
+        )
+        
+        return {
+            "accounts": accounts,
+            "count": len(accounts)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch Plaid accounts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch accounts")
+
+
+@app.get("/api/plaid/transactions")
+async def get_plaid_transactions(
+    request: Request,
+    days: int = 90,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Retrieve transactions from linked bank accounts via Plaid.
+    
+    Args:
+        days: Number of days of history to retrieve (default 90, max 730)
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.plaid_integration import PlaidIntegration
+    from services.postgres_db import AsyncSessionLocal
+    from services.dao.user_dao import UserDAO
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    # Validate days parameter
+    if days < 1 or days > 730:
+        raise HTTPException(status_code=400, detail="Days must be between 1 and 730")
+    
+    try:
+        # Get stored Plaid access token
+        async with AsyncSessionLocal() as db:
+            plaid_token = await UserDAO.get_encrypted_credential(
+                db,
+                user_id,
+                "plaid_token"
+            )
+        
+        if not plaid_token:
+            return {
+                "transactions": [],
+                "message": "No Plaid account connected"
+            }
+        
+        plaid = PlaidIntegration()
+        transactions = await plaid.get_transactions(str(user_id), plaid_token, days)
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "get_plaid_transactions",
+            user_id=str(user_id),
+            data={"transaction_count": len(transactions), "days": days}
+        )
+        
+        return {
+            "transactions": transactions,
+            "count": len(transactions),
+            "days": days
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch Plaid transactions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch transactions")
+
+
+@app.get("/api/plaid/status")
+async def get_plaid_status(request: Request):
+    """Get Plaid integration status (no auth required for status check)"""
+    from services.plaid_integration import PlaidIntegration
+    
+    try:
+        plaid = PlaidIntegration()
+        return plaid.get_status()
+    except Exception as e:
+        logger.error(f"Failed to get Plaid status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get status")
+
+
+# ============================================================================
+# Goal Planner Endpoints (CRUD + Risk Assessment)
+# ============================================================================
+
+@app.post("/api/goals")
+async def create_goal(
+    request: Request,
+    name: str,
+    target_amount: float,
+    target_date: str,  # ISO format: 2024-12-31
+    category: str,
+    description: str = None,
+    priority: str = "medium",
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Create a new financial goal.
+    
+    Args:
+        name: Goal name (e.g., "Home Down Payment")
+        target_amount: Target amount in USD
+        target_date: Target date in ISO format (YYYY-MM-DD)
+        category: Category (retirement, housing, travel, education, etc.)
+        description: Optional goal description
+        priority: Priority level (low, medium, high)
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.dao.goal_dao import GoalDAO
+    from services.postgres_db import AsyncSessionLocal
+    from datetime import datetime as dt
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        # Parse target date
+        try:
+            target_dt = dt.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        
+        async with AsyncSessionLocal() as db:
+            goal = await GoalDAO.create(
+                db,
+                user_id=user_id,
+                name=name,
+                target_amount=Decimal(str(target_amount)),
+                target_date=target_dt,
+                category=category,
+                description=description,
+                priority=priority
+            )
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "create_goal",
+            user_id=str(user_id),
+            data={"goal_name": name, "target": target_amount}
+        )
+        
+        return {
+            "id": str(goal.id),
+            "name": goal.name,
+            "target_amount": float(goal.target_amount),
+            "target_date": goal.target_date.isoformat(),
+            "category": goal.category,
+            "status": "active",
+            "created_at": goal.created_at.isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Goal creation error for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create goal")
+
+
+@app.get("/api/goals")
+async def get_user_goals(
+    request: Request,
+    status: str = None,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Get all goals for the user.
+    
+    Args:
+        status: Optional filter by status (active, completed, paused)
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.dao.goal_dao import GoalDAO
+    from services.postgres_db import AsyncSessionLocal
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        async with AsyncSessionLocal() as db:
+            if status:
+                goals = await GoalDAO.get_by_user_and_status(db, user_id, status)
+            else:
+                goals = await GoalDAO.get_by_user(db, user_id)
+        
+        return {
+            "goals": [
+                {
+                    "id": str(g.id),
+                    "name": g.name,
+                    "target_amount": float(g.target_amount),
+                    "current_amount": float(g.current_amount),
+                    "target_date": g.target_date.isoformat(),
+                    "category": g.category,
+                    "priority": g.priority,
+                    "status": g.status,
+                    "progress_pct": float((g.current_amount / g.target_amount * 100) if g.target_amount > 0 else 0)
+                }
+                for g in goals
+            ],
+            "count": len(goals)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching goals: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch goals")
+
+
+@app.get("/api/goals/{goal_id}")
+async def get_goal(
+    goal_id: str,
+    request: Request,
+    auth_data: dict = Depends(lambda: None)
+):
+    """Get a specific goal with full details"""
+    from middleware.auth import get_current_user_from_request
+    from services.dao.goal_dao import GoalDAO
+    from services.postgres_db import AsyncSessionLocal
+    from uuid import UUID
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        async with AsyncSessionLocal() as db:
+            goal = await GoalDAO.get_by_id(db, UUID(goal_id))
+        
+        if not goal or str(goal.user_id) != str(user_id):
+            raise HTTPException(status_code=404, detail="Goal not found")
+        
+        return {
+            "id": str(goal.id),
+            "name": goal.name,
+            "description": goal.description,
+            "target_amount": float(goal.target_amount),
+            "current_amount": float(goal.current_amount),
+            "target_date": goal.target_date.isoformat(),
+            "category": goal.category,
+            "priority": goal.priority,
+            "status": goal.status,
+            "progress_pct": float((goal.current_amount / goal.target_amount * 100) if goal.target_amount > 0 else 0),
+            "risk_assessment": goal.risk_assessment,
+            "strategy_recommendation": goal.strategy_recommendation,
+            "created_at": goal.created_at.isoformat(),
+            "updated_at": goal.updated_at.isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching goal: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch goal")
+
+
+@app.put("/api/goals/{goal_id}")
+async def update_goal(
+    goal_id: str,
+    request: Request,
+    name: str = None,
+    target_amount: float = None,
+    target_date: str = None,
+    priority: str = None,
+    status: str = None,
+    description: str = None,
+    auth_data: dict = Depends(lambda: None)
+):
+    """Update a goal"""
+    from middleware.auth import get_current_user_from_request
+    from services.dao.goal_dao import GoalDAO
+    from services.postgres_db import AsyncSessionLocal
+    from uuid import UUID
+    from datetime import datetime as dt
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        # Build update dict
+        update_data = {}
+        if name:
+            update_data["name"] = name
+        if target_amount:
+            update_data["target_amount"] = Decimal(str(target_amount))
+        if target_date:
+            try:
+                update_data["target_date"] = dt.strptime(target_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date format")
+        if priority:
+            update_data["priority"] = priority
+        if status:
+            update_data["status"] = status
+        if description is not None:
+            update_data["description"] = description
+        
+        async with AsyncSessionLocal() as db:
+            goal = await GoalDAO.update(db, UUID(goal_id), user_id, **update_data)
+        
+        if not goal:
+            raise HTTPException(status_code=404, detail="Goal not found or unauthorized")
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "update_goal",
+            user_id=str(user_id),
+            data={"goal_id": goal_id}
+        )
+        
+        return {
+            "id": str(goal.id),
+            "name": goal.name,
+            "status": goal.status,
+            "message": "Goal updated successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating goal: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update goal")
+
+
+@app.delete("/api/goals/{goal_id}")
+async def delete_goal(
+    goal_id: str,
+    request: Request,
+    auth_data: dict = Depends(lambda: None)
+):
+    """Delete a goal"""
+    from middleware.auth import get_current_user_from_request
+    from services.dao.goal_dao import GoalDAO
+    from services.postgres_db import AsyncSessionLocal
+    from uuid import UUID
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        async with AsyncSessionLocal() as db:
+            success = await GoalDAO.delete(db, UUID(goal_id), user_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Goal not found or unauthorized")
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "delete_goal",
+            user_id=str(user_id),
+            data={"goal_id": goal_id}
+        )
+        
+        return {"message": "Goal deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting goal: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete goal")
+
+
+@app.put("/api/goals/{goal_id}/progress")
+async def update_goal_progress(
+    goal_id: str,
+    current_amount: float,
+    request: Request,
+    auth_data: dict = Depends(lambda: None)
+):
+    """Update goal progress (current amount saved)"""
+    from middleware.auth import get_current_user_from_request
+    from services.dao.goal_dao import GoalDAO
+    from services.postgres_db import AsyncSessionLocal
+    from uuid import UUID
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        async with AsyncSessionLocal() as db:
+            goal = await GoalDAO.update_progress(
+                db,
+                UUID(goal_id),
+                user_id,
+                Decimal(str(current_amount))
+            )
+        
+        if not goal:
+            raise HTTPException(status_code=404, detail="Goal not found")
+        
+        progress_pct = float((goal.current_amount / goal.target_amount * 100) if goal.target_amount > 0 else 0)
+        
+        return {
+            "id": str(goal.id),
+            "current_amount": float(goal.current_amount),
+            "target_amount": float(goal.target_amount),
+            "progress_pct": progress_pct,
+            "message": f"Progress updated: {progress_pct:.1f}%"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating goal progress: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update progress")
 
 
 @app.get("/api/news")
@@ -917,6 +1690,236 @@ async def voice_parse_command(req: VoiceCommandRequest):
         raise HTTPException(status_code=503, detail="Voice service not initialized")
     result = voice_service.parse_voice_commands(req.text)
     return result
+
+
+# ============================================================================
+# Voice Command Security Endpoints
+# ============================================================================
+
+@app.post("/api/voice/execute-command")
+async def execute_voice_command(
+    request: Request,
+    command_type: str,
+    symbol: str,
+    quantity: float,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Execute a voice command (with automatic rate limiting and confirmation).
+    
+    For high-value trades (>$10k), requires a subsequent /api/voice/confirm call.
+    Returns pending_command_id if confirmation needed.
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.voice_security import (
+        voice_command_tracker, VoiceCommandValidator, CommandType, VoiceCommandLogger
+    )
+    import uuid
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        # Check rate limit (5 commands per minute)
+        is_allowed, error = voice_command_tracker.check_rate_limit(user_id)
+        if not is_allowed:
+            VoiceCommandLogger.log_command(user_id, command_type, "error", error=error)
+            raise HTTPException(status_code=429, detail=error)
+        
+        # Validate command type
+        try:
+            cmd_type = CommandType[command_type.upper()]
+        except KeyError:
+            raise HTTPException(status_code=400, detail=f"Unknown command type: {command_type}")
+        
+        # Validate order (for trade commands)
+        if cmd_type in [CommandType.BUY, CommandType.SELL]:
+            is_valid, error = VoiceCommandValidator.validate_order(
+                symbol=symbol,
+                quantity=quantity,
+                account_balance=50000  # TODO: fetch from user's portfolio
+            )
+            if not is_valid:
+                VoiceCommandLogger.log_command(
+                    user_id, command_type, "error",
+                    details={"symbol": symbol, "quantity": quantity},
+                    error=error
+                )
+                raise HTTPException(status_code=400, detail=error)
+        
+        # Create pending command
+        command_id = str(uuid.uuid4())[:8]
+        pending_cmd = voice_command_tracker.create_pending_command(
+            user_id=user_id,
+            command_id=command_id,
+            command_type=cmd_type,
+            amount=quantity,
+            symbol=symbol,
+            metadata={"request_time": datetime.now().isoformat()}
+        )
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "execute_voice_command",
+            user_id=str(user_id),
+            data={"command_id": command_id, "type": command_type, "symbol": symbol, "qty": quantity}
+        )
+        
+        return {
+            "command_id": command_id,
+            "status": "pending" if pending_cmd["requires_confirmation"] else "confirmed",
+            "requires_confirmation": pending_cmd["requires_confirmation"],
+            "confirmation_token": pending_cmd.get("confirmation_token"),
+            "message": "Confirmation required" if pending_cmd["requires_confirmation"] else "Command executed"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Voice command execution error for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to execute voice command")
+
+
+@app.post("/api/voice/confirm")
+async def confirm_voice_command(
+    request: Request,
+    command_id: str,
+    confirmation_phrase: str,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Confirm a pending voice command with explicit confirmation phrase.
+    
+    Valid confirmation phrases:
+        - "yes"
+        - "confirm"
+        - "execute"
+        - "proceed"
+        - "approved"
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.voice_security import voice_command_tracker, VoiceCommandLogger
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        # Confirm the command
+        success, error = voice_command_tracker.confirm_command(
+            user_id=user_id,
+            command_id=command_id,
+            confirmation_phrase=confirmation_phrase
+        )
+        
+        if not success:
+            VoiceCommandLogger.log_command(user_id, "confirm", "error", error=error)
+            raise HTTPException(status_code=400, detail=error)
+        
+        # Get the confirmed command
+        confirmed_cmd = voice_command_tracker.get_pending_command(user_id, command_id)
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "confirm_voice_command",
+            user_id=str(user_id),
+            data={"command_id": command_id, "type": confirmed_cmd["command_type"]}
+        )
+        
+        VoiceCommandLogger.log_command(user_id, confirmed_cmd["command_type"], "confirmed")
+        
+        return {
+            "command_id": command_id,
+            "status": "confirmed",
+            "message": f"Command {confirmed_cmd['command_type']} confirmed and ready to execute"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Voice command confirmation error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to confirm command")
+
+
+@app.post("/api/voice/reject")
+async def reject_voice_command(
+    request: Request,
+    command_id: str,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Reject a pending voice command.
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.voice_security import voice_command_tracker, VoiceCommandLogger
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        success, error = voice_command_tracker.reject_command(user_id, command_id)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail=error)
+        
+        RequestLogger.log_request(
+            structured_logger,
+            "reject_voice_command",
+            user_id=str(user_id),
+            data={"command_id": command_id}
+        )
+        
+        VoiceCommandLogger.log_command(user_id, "command", "rejected")
+        
+        return {
+            "command_id": command_id,
+            "status": "rejected",
+            "message": "Command rejected"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Voice command rejection error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reject command")
+
+
+@app.get("/api/voice/pending-commands")
+async def get_pending_commands(
+    request: Request,
+    auth_data: dict = Depends(lambda: None)
+):
+    """
+    Get all pending voice commands for the user.
+    
+    Requires authentication header:
+        Authorization: Bearer <access_token>
+    """
+    from middleware.auth import get_current_user_from_request
+    from services.voice_security import voice_command_tracker
+    
+    auth_data = await get_current_user_from_request(request)
+    user_id = auth_data['user_id']
+    
+    try:
+        pending_cmds = voice_command_tracker.list_pending_commands(user_id)
+        
+        return {
+            "pending_commands": pending_cmds,
+            "count": len(pending_cmds)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching pending commands: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch pending commands")
 
 
 # =======================================

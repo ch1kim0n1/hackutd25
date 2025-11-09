@@ -3,7 +3,7 @@
 User model for APEX - stores user authentication and profile information.
 """
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Boolean, JSON, Integer
+from sqlalchemy import Column, String, DateTime, Boolean, JSON, Integer, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -39,11 +39,15 @@ class User(Base):
     # Security
     two_factor_enabled = Column(Boolean, default=False)
     two_factor_secret = Column(String(255))
+    
+    # Encryption Key (per-user Fernet key for encrypting sensitive credentials)
+    # Generated on user creation, stored in DB, used to encrypt/decrypt API keys
+    encryption_key = Column(String(255), nullable=True)  # Base64-encoded Fernet key
 
-    # External Integrations
-    plaid_access_token = Column(String(255))  # Encrypted Plaid access token
-    alpaca_api_key = Column(String(255))  # Encrypted Alpaca API key
-    alpaca_secret_key = Column(String(255))  # Encrypted Alpaca secret
+    # External Integrations (encrypted)
+    plaid_access_token = Column(LargeBinary, nullable=True)  # Encrypted Plaid access token
+    alpaca_api_key = Column(LargeBinary, nullable=True)  # Encrypted Alpaca API key
+    alpaca_secret_key = Column(LargeBinary, nullable=True)  # Encrypted Alpaca secret
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

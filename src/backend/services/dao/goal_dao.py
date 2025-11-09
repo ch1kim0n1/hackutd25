@@ -56,6 +56,17 @@ class GoalDAO:
         return list(result.scalars().all())
 
     @staticmethod
+    async def get_by_user_and_status(db: AsyncSession, user_id: str, status: str) -> List[Goal]:
+        """Get goals by user and status"""
+        result = await db.execute(
+            select(Goal).where(
+                Goal.user_id == user_id,
+                Goal.status == status
+            ).order_by(Goal.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def get_active_by_user(db: AsyncSession, user_id: str) -> List[Goal]:
         """Get active goals for a user"""
         result = await db.execute(
@@ -79,8 +90,18 @@ class GoalDAO:
         return list(result.scalars().all())
 
     @staticmethod
-    async def update(db: AsyncSession, goal_id: str, **kwargs) -> Optional[Goal]:
-        """Update goal"""
+    async def update(db: AsyncSession, goal_id: str, user_id: str, **kwargs) -> Optional[Goal]:
+        """Update goal with user ownership validation (public API)"""
+        # Verify goal belongs to user
+        goal = await GoalDAO.get_by_id(db, goal_id)
+        if not goal or str(goal.user_id) != str(user_id):
+            return None
+        
+        return await GoalDAO._update_internal(db, goal_id, **kwargs)
+
+    @staticmethod
+    async def _update_internal(db: AsyncSession, goal_id: str, **kwargs) -> Optional[Goal]:
+        """Internal update without user validation"""
         stmt = (
             update(Goal)
             .where(Goal.id == goal_id)
@@ -95,16 +116,17 @@ class GoalDAO:
     async def update_progress(
         db: AsyncSession,
         goal_id: str,
+        user_id: str,
         current_amount: Decimal
     ) -> Optional[Goal]:
         """Update goal progress"""
         goal = await GoalDAO.get_by_id(db, goal_id)
-        if not goal:
+        if not goal or str(goal.user_id) != str(user_id):
             return None
 
         progress_pct = (current_amount / goal.target_amount * 100) if goal.target_amount else 0
 
-        return await GoalDAO.update(
+        return await GoalDAO._update_internal(
             db,
             goal_id,
             current_amount=current_amount,
@@ -121,7 +143,7 @@ class GoalDAO:
         success_probability: float
     ) -> Optional[Goal]:
         """Update goal projections from Risk Agent"""
-        return await GoalDAO.update(
+        return await GoalDAO._update_internal(
             db,
             goal_id,
             conservative_projection=conservative,
@@ -148,7 +170,7 @@ class GoalDAO:
         if notes:
             update_data["validation_notes"] = notes
 
-        return await GoalDAO.update(db, goal_id, **update_data)
+        return await GoalDAO._update_internal(db, goal_id, **update_data)
 
     @staticmethod
     async def add_milestone(
@@ -164,7 +186,7 @@ class GoalDAO:
         milestones = goal.milestones or []
         milestones.append(milestone)
 
-        return await GoalDAO.update(db, goal_id, milestones=milestones)
+        return await GoalDAO._update_internal(db, goal_id, milestones=milestones)
 
     @staticmethod
     async def update_milestone(
@@ -182,12 +204,12 @@ class GoalDAO:
         milestones[milestone_index]["achieved"] = achieved
         milestones[milestone_index]["achieved_at"] = datetime.utcnow().isoformat()
 
-        return await GoalDAO.update(db, goal_id, milestones=milestones)
+        return await GoalDAO._update_internal(db, goal_id, milestones=milestones)
 
     @staticmethod
     async def mark_achieved(db: AsyncSession, goal_id: str) -> Optional[Goal]:
         """Mark goal as achieved"""
-        return await GoalDAO.update(
+        return await GoalDAO._update_internal(
             db,
             goal_id,
             status="achieved",
@@ -198,21 +220,25 @@ class GoalDAO:
     @staticmethod
     async def pause(db: AsyncSession, goal_id: str) -> Optional[Goal]:
         """Pause goal"""
-        return await GoalDAO.update(db, goal_id, status="paused")
+        return await GoalDAO._update_internal(db, goal_id, status="paused")
 
     @staticmethod
     async def resume(db: AsyncSession, goal_id: str) -> Optional[Goal]:
         """Resume paused goal"""
-        return await GoalDAO.update(db, goal_id, status="active")
+        return await GoalDAO._update_internal(db, goal_id, status="active")
 
     @staticmethod
     async def abandon(db: AsyncSession, goal_id: str) -> Optional[Goal]:
         """Mark goal as abandoned"""
-        return await GoalDAO.update(db, goal_id, status="abandoned", is_active=0)
+        return await GoalDAO._update_internal(db, goal_id, status="abandoned", is_active=0)
 
     @staticmethod
-    async def delete(db: AsyncSession, goal_id: str) -> bool:
-        """Delete goal"""
+    async def delete(db: AsyncSession, goal_id: str, user_id: str) -> bool:
+        """Delete goal with user ownership validation"""
+        goal = await GoalDAO.get_by_id(db, goal_id)
+        if not goal or str(goal.user_id) != str(user_id):
+            return False
+        
         stmt = delete(Goal).where(Goal.id == goal_id)
         result = await db.execute(stmt)
         await db.commit()

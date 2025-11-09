@@ -1,15 +1,19 @@
 # backend/services/dao/user_dao.py
 """
 Data Access Object for User model.
-Handles all database operations for users.
+Handles all database operations for users with proper async support.
 """
 from typing import Optional, List
 from datetime import datetime
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from uuid import UUID
+import logging
 
 from ...models.user import User
+
+logger = logging.getLogger(__name__)
 
 
 class UserDAO:
@@ -34,20 +38,126 @@ class UserDAO:
             db.add(user)
             await db.commit()
             await db.refresh(user)
+            logger.info(f"User created: {username}")
             return user
-        except IntegrityError:
+        except IntegrityError as e:
             await db.rollback()
+            logger.error(f"User creation failed (duplicate): {e}")
             return None
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"User creation error: {e}")
+            raise
 
     @staticmethod
-    async def get_by_id(db: AsyncSession, user_id: str) -> Optional[User]:
+    async def get_by_id(db: AsyncSession, user_id) -> Optional[User]:
         """Get user by ID"""
-        result = await db.execute(select(User).where(User.id == user_id))
-        return result.scalar_one_or_none()
+        try:
+            if isinstance(user_id, str):
+                user_id = UUID(user_id)
+            result = await db.execute(select(User).where(User.id == user_id))
+            return result.scalar_one_or_none()
+        except Exception as e:
+            logger.error(f"Error fetching user {user_id}: {e}")
+            return None
 
     @staticmethod
     async def get_by_username(db: AsyncSession, username: str) -> Optional[User]:
         """Get user by username"""
+        try:
+            result = await db.execute(select(User).where(User.username == username))
+            return result.scalar_one_or_none()
+        except Exception as e:
+            logger.error(f"Error fetching user {username}: {e}")
+            return None
+
+    @staticmethod
+    async def get_by_email(db: AsyncSession, email: str) -> Optional[User]:
+        """Get user by email"""
+        try:
+            result = await db.execute(select(User).where(User.email == email))
+            return result.scalar_one_or_none()
+        except Exception as e:
+            logger.error(f"Error fetching user by email {email}: {e}")
+            return None
+
+    @staticmethod
+    async def update(
+        db: AsyncSession,
+        user_id,
+        **kwargs
+    ) -> Optional[User]:
+        """Update user fields"""
+        try:
+            if isinstance(user_id, str):
+                user_id = UUID(user_id)
+            
+            stmt = update(User).where(User.id == user_id).values(**kwargs)
+            await db.execute(stmt)
+            await db.commit()
+            
+            # Fetch updated user
+            return await UserDAO.get_by_id(db, user_id)
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Error updating user {user_id}: {e}")
+            raise
+
+    @staticmethod
+    async def delete(db: AsyncSession, user_id) -> bool:
+        """Delete a user"""
+        try:
+            if isinstance(user_id, str):
+                user_id = UUID(user_id)
+            
+            stmt = delete(User).where(User.id == user_id)
+            result = await db.execute(stmt)
+            await db.commit()
+            logger.info(f"User {user_id} deleted")
+            return result.rowcount > 0
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Error deleting user {user_id}: {e}")
+            return False
+
+    @staticmethod
+    async def list_all(
+        db: AsyncSession,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[User]:
+        """List all users with pagination"""
+        try:
+            stmt = select(User).limit(limit).offset(offset)
+            result = await db.execute(stmt)
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error listing users: {e}")
+            return []
+
+    @staticmethod
+    async def search_by_username(
+        db: AsyncSession,
+        username_pattern: str
+    ) -> List[User]:
+        """Search users by username pattern"""
+        try:
+            stmt = select(User).where(User.username.like(f"%{username_pattern}%"))
+            result = await db.execute(stmt)
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error searching users: {e}")
+            return []
+
+    @staticmethod
+    async def count_active_users(db: AsyncSession) -> int:
+        """Count active users"""
+        try:
+            result = await db.execute(select(User).where(User.is_active == True))
+            return len(result.scalars().all())
+        except Exception as e:
+            logger.error(f"Error counting users: {e}")
+            return 0
         result = await db.execute(select(User).where(User.username == username))
         return result.scalar_one_or_none()
 
@@ -140,6 +250,118 @@ class UserDAO:
             alpaca_api_key=api_key,
             alpaca_secret_key=secret_key
         )
+
+    @staticmethod
+    async def set_encrypted_credential(
+        db: AsyncSession,
+        user_id: UUID,
+        credential_type: str,
+        plaintext_value: str
+    ) -> bool:
+        """
+        Encrypt and store a credential for a user.
+        
+        Args:
+            db: Database session
+            user_id: User ID
+            credential_type: 'plaid_token', 'alpaca_api_key', or 'alpaca_secret_key'
+            plaintext_value: The plaintext credential to encrypt
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        from ..credential_encryption import CredentialEncryptionService
+        
+        try:
+            # Get user and their encryption key
+            user = await UserDAO.get_by_id(db, user_id)
+            if not user:
+                logger.error(f"User not found: {user_id}")
+                return False
+            
+            # If user doesn't have an encryption key, generate one
+            if not user.encryption_key:
+                user.encryption_key = CredentialEncryptionService.generate_encryption_key()
+                logger.info(f"Generated encryption key for user {user_id}")
+            
+            # Encrypt the credential
+            ciphertext = CredentialEncryptionService.encrypt_credential(
+                plaintext_value,
+                user.encryption_key
+            )
+            
+            # Store the encrypted credential
+            if credential_type == 'plaid_token':
+                user.plaid_access_token = ciphertext
+            elif credential_type == 'alpaca_api_key':
+                user.alpaca_api_key = ciphertext
+            elif credential_type == 'alpaca_secret_key':
+                user.alpaca_secret_key = ciphertext
+            else:
+                logger.error(f"Unknown credential type: {credential_type}")
+                return False
+            
+            await db.commit()
+            logger.info(f"Encrypted credential stored for user {user_id}: {credential_type}")
+            return True
+            
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Failed to set encrypted credential: {e}")
+            return False
+
+    @staticmethod
+    async def get_encrypted_credential(
+        db: AsyncSession,
+        user_id: UUID,
+        credential_type: str
+    ) -> Optional[str]:
+        """
+        Retrieve and decrypt a credential for a user.
+        
+        Args:
+            db: Database session
+            user_id: User ID
+            credential_type: 'plaid_token', 'alpaca_api_key', or 'alpaca_secret_key'
+        
+        Returns:
+            Decrypted plaintext credential, or None if not found
+        """
+        from ..credential_encryption import CredentialEncryptionService
+        
+        try:
+            # Get user
+            user = await UserDAO.get_by_id(db, user_id)
+            if not user or not user.encryption_key:
+                logger.error(f"User or encryption key not found for {user_id}")
+                return None
+            
+            # Get the encrypted credential
+            if credential_type == 'plaid_token':
+                ciphertext = user.plaid_access_token
+            elif credential_type == 'alpaca_api_key':
+                ciphertext = user.alpaca_api_key
+            elif credential_type == 'alpaca_secret_key':
+                ciphertext = user.alpaca_secret_key
+            else:
+                logger.error(f"Unknown credential type: {credential_type}")
+                return None
+            
+            if not ciphertext:
+                logger.warning(f"No credential stored for user {user_id}: {credential_type}")
+                return None
+            
+            # Decrypt and return
+            plaintext = CredentialEncryptionService.decrypt_credential(
+                ciphertext,
+                user.encryption_key
+            )
+            
+            return plaintext
+            
+        except Exception as e:
+            logger.error(f"Failed to get encrypted credential: {e}")
+            return None
 
     @staticmethod
     async def delete(db: AsyncSession, user_id: str) -> bool:
