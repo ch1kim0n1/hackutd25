@@ -26,6 +26,10 @@ export { AssetService } from './AssetService';
 export { MarketDataService } from './MarketDataService';
 export { WatchlistService } from './WatchlistService';
 export { ClockService } from './ClockService';
+export { default as YahooFinanceService } from './YahooFinanceService';
+export { default as EnhancedMarketService } from './EnhancedMarketService';
+export type { YahooQuote, YahooHistoricalData } from './YahooFinanceService';
+export type { MarketDataOptions, PaginatedMarketData } from './EnhancedMarketService';
 
 // Configuration
 export { getAlpacaConfig, ALPACA_URLS } from './alpaca.config';

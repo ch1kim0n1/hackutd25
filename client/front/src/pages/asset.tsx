@@ -4,11 +4,11 @@ import { Card, CardBody, CardHeader } from "@heroui/card";
 import { Button } from "@heroui/button";
 import { Chip } from "@heroui/chip";
 import { Spinner } from "@heroui/spinner";
-import { StockChart } from "@/components/StockChart";
+import { BalanceChart } from "@/components/BalanceChart";
 import { ChatBox } from "@/components/ChatBox";
 import { AssetSidebar } from "@/components/AssetSidebar";
 import { BuySellDialog } from "@/components/BuySellDialog";
-import { ChatMessage, StockDataPoint } from "@/types";
+import { ChatMessage } from "@/types";
 import { AssetService } from "@/services/AssetService";
 import { MarketDataService } from "@/services/MarketDataService";
 import SimpleTradingService from "@/services/SimpleTradingService";
@@ -20,7 +20,7 @@ export default function AssetPage() {
   
   const [assetInfo, setAssetInfo] = useState<AlpacaAsset | null>(null);
   const [loading, setLoading] = useState(true);
-  const [chartData, setChartData] = useState<StockDataPoint[]>([]);
+  const [chartData, setChartData] = useState<{ date: Date; balance: number }[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [userPosition, setUserPosition] = useState<Position | null>(null);
@@ -114,77 +114,49 @@ export default function AssetPage() {
 
       setPriceData(priceDataObj);
 
-      // Load historical data for chart (last 30 days with hourly data)
+      // Load historical data for balance chart (last 30 days)
       const endDate = new Date();
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - 30);
 
-      let stockData: StockDataPoint[] = [];
+      let balanceData: { date: Date; balance: number }[] = [];
       
       try {
         const bars = await marketDataService.getBars(symbol, {
           start: startDate,
           end: endDate,
-          timeframe: '1Hour',
-          limit: 1000,
+          timeframe: '1Day',
+          limit: 30,
         });
 
-        stockData = bars.map(bar => ({
+        // Convert bars to balance data (using close price as balance)
+        balanceData = bars.map(bar => ({
           date: new Date(bar.t),
-          open: bar.o,
-          high: bar.h,
-          low: bar.l,
-          close: bar.c,
-          volume: bar.v,
+          balance: bar.c,
         }));
       } catch (barError: any) {
         console.warn("Could not fetch historical bars, using mock data:", barError.message);
         
-        // Generate mock hourly data for the last 30 days (30 days * 24 hours = 720 data points)
-        // For market hours only: 6.5 hours per day * 30 days = ~195 data points
+        // Generate mock daily balance data for the last 30 days
         const basePrice = currentPrice || 100;
-        const marketHoursPerDay = 24 // 9:30 AM - 4:00 PM EST
         const tradingDays = 30;
-        const totalBars = Math.floor(tradingDays * marketHoursPerDay);
         
-        stockData = Array.from({ length: totalBars }, (_, i) => {
+        balanceData = Array.from({ length: tradingDays }, (_, i) => {
           const date = new Date(startDate);
-          // Add days and hours (only during market hours)
-          const dayOffset = Math.floor(i / marketHoursPerDay);
-          const hourOffset = (i % marketHoursPerDay);
-          date.setDate(date.getDate() + dayOffset);
-          date.setHours(9 + Math.floor(hourOffset + 0.5)); // Start at 9:30 AM
-          date.setMinutes(hourOffset % 1 === 0.5 ? 30 : 0);
+          date.setDate(date.getDate() + i);
           
-          // Create realistic intraday price movement
-          const trendChange = (Math.random() - 0.5) * 0.002; // ±0.2% per hour
-          const hourPrice = basePrice * (1 + (i * trendChange / totalBars));
-          const variance = hourPrice * 0.005; // 0.5% intraday range per hour
-          
-          // Randomly decide if it's a bullish or bearish hour
-          const isBullish = Math.random() > 0.48;
-          const openOffset = Math.random() * variance;
-          const closeOffset = Math.random() * variance;
-          
-          const open = isBullish 
-            ? hourPrice - openOffset 
-            : hourPrice + openOffset;
-          const close = isBullish 
-            ? hourPrice + closeOffset 
-            : hourPrice - closeOffset;
+          // Create realistic daily price movement with trend
+          const trendChange = (Math.random() - 0.5) * 0.02; // ±2% daily variation
+          const balance = basePrice * (1 + (i * trendChange / tradingDays));
           
           return {
             date,
-            open: open,
-            high: Math.max(open, close) + Math.random() * variance * 0.3,
-            low: Math.min(open, close) - Math.random() * variance * 0.3,
-            close: close,
-            volume: Math.floor(Math.random() * 10000000) + 1000000,
+            balance: balance + (Math.random() - 0.5) * basePrice * 0.05, // Add some daily volatility
           };
         });
       }
 
-      setChartData(stockData);
+      setChartData(balanceData);
 
       // Add welcome message
       setMessages([
@@ -599,9 +571,9 @@ export default function AssetPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Chart - 2/3 width on large screens */}
             <div className="lg:col-span-2 h-[500px]">
-              <StockChart
+              <BalanceChart
                 data={chartData}
-                symbol={assetInfo.symbol}
+                title={`${assetInfo.symbol} Price History (30 Days)`}
               />
             </div>
 

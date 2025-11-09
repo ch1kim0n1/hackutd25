@@ -6,134 +6,141 @@ import { Input } from "@heroui/input";
 import { Chip } from "@heroui/chip";
 import { Spinner } from "@heroui/spinner";
 import { ChatBox } from "@/components/ChatBox";
+import InfiniteStockList from "@/components/InfiniteStockList";
 import { Asset, ChatMessage } from "@/types";
-import { AssetService } from "@/services/AssetService";
-import { MarketDataService } from "@/services/MarketDataService";
-
-const ITEMS_PER_PAGE = 20;
+import EnhancedMarketService from "@/services/EnhancedMarketService";
+import YahooFinanceService from "@/services/YahooFinanceService";
+import { navbar } from "@heroui/theme";
 
 export default function MarketPage() {
   const navigate = useNavigate();
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [filteredAssets, setFilteredAssets] = useState<Asset[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [category, setCategory] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("change");
 
-  // Services
-  const assetService = new AssetService();
-  const marketDataService = new MarketDataService();
+  const categories = ['all', ...EnhancedMarketService.getCategories()];
 
-  // Load assets on mount
+  // Load assets on mount and when filters change
   useEffect(() => {
-    loadAssets();
-  }, []);
+    loadInitialAssets();
+  }, [category, sortBy]);
 
-  // Filter assets when search changes
+  // Handle search with debounce
   useEffect(() => {
-    if (searchQuery.trim() === "") {
-      setFilteredAssets(assets);
-    } else {
-      const query = searchQuery.toLowerCase();
-      const filtered = assets.filter(
-        (asset) =>
-          asset.symbol.toLowerCase().includes(query) ||
-          asset.name.toLowerCase().includes(query)
-      );
-      setFilteredAssets(filtered);
+    if (!searchQuery.trim()) {
+      loadInitialAssets();
+      return;
     }
-    setCurrentPage(1); // Reset to first page on search
-  }, [searchQuery, assets]);
 
-  const loadAssets = async () => {
+    const timeoutId = setTimeout(() => {
+      handleSearch();
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery]);
+
+  const loadInitialAssets = async () => {
     try {
-      setLoading(true);
+      setInitialLoading(true);
+      setAssets([]);
+      setCurrentPage(1);
       
-      // Get tradable US equities
-      const rawAssets = await assetService.getTradableAssets('us_equity');
-      
-      // Get top 100 by popularity/market cap (you can adjust this)
-      const popularSymbols = rawAssets
-        .filter(a => a.tradable && a.status === 'active')
-        .slice(0, 100)
-        .map(a => a.symbol);
+      const result = await EnhancedMarketService.getMarketData(1, {
+        pageSize: 20,
+        category: category as any,
+        sortBy: sortBy as any,
+        sortOrder: 'desc',
+      });
 
-      let assetsWithPrices: Asset[] = [];
-
-      try {
-        // Try to fetch market data for these assets
-        const snapshots = await marketDataService.getSnapshots(popularSymbols);
-        
-        // Combine asset info with market data
-        assetsWithPrices = popularSymbols
-          .map(symbol => {
-            const assetInfo = rawAssets.find(a => a.symbol === symbol);
-            const snapshot = snapshots[symbol];
-            
-            if (!assetInfo || !snapshot?.latestTrade) return null;
-
-            const currentPrice = snapshot.latestTrade.p;
-            const previousClose = snapshot.prevDailyBar?.c || currentPrice;
-            const dailyChange = previousClose > 0 
-              ? ((currentPrice - previousClose) / previousClose) * 100 
-              : 0;
-
-            return {
-              symbol: assetInfo.symbol,
-              name: assetInfo.name,
-              price: currentPrice,
-              dailyChange,
-              volume: snapshot.dailyBar?.v || 0,
-              marketCap: 0,
-            } as Asset;
-          })
-          .filter((asset): asset is Asset => asset !== null);
-      } catch (marketDataError: any) {
-        console.warn("Could not fetch market data, using mock prices:", marketDataError.message);
-        
-        // Fallback: Use mock data for top 20 assets
-        assetsWithPrices = popularSymbols.slice(0, 20).map(symbol => {
-          const assetInfo = rawAssets.find(a => a.symbol === symbol);
-          if (!assetInfo) return null;
-
-          const mockPrice = 50 + Math.random() * 450; // Random price between 50-500
-          const mockChange = (Math.random() - 0.5) * 10; // ±5% change
-
-          return {
-            symbol: assetInfo.symbol,
-            name: assetInfo.name,
-            price: mockPrice,
-            dailyChange: mockChange,
-            volume: Math.floor(Math.random() * 10000000) + 1000000,
-            marketCap: 0,
-          } as Asset;
-        }).filter((asset): asset is Asset => asset !== null);
-      }
-
-      setAssets(assetsWithPrices);
-      setFilteredAssets(assetsWithPrices);
+      setAssets(result.assets);
+      setHasMore(result.hasMore);
+      setCurrentPage(2);
     } catch (error) {
       console.error("Error loading assets:", error);
       setAssets([]);
-      setFilteredAssets([]);
+      setHasMore(false);
+    } finally {
+      setInitialLoading(false);
+    }
+  };
+
+  const loadMoreAssets = async () => {
+    if (loading || !hasMore) return;
+
+    try {
+      setLoading(true);
+      
+      const result = await EnhancedMarketService.getMarketData(currentPage, {
+        pageSize: 20,
+        category: category as any,
+        sortBy: sortBy as any,
+        sortOrder: 'desc',
+        searchQuery: searchQuery || undefined,
+      });
+
+      setAssets(prev => [...prev, ...result.assets]);
+      setHasMore(result.hasMore);
+      setCurrentPage(prev => prev + 1);
+    } catch (error) {
+      console.error("Error loading more assets:", error);
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
   };
 
-  // Pagination
-  const totalPages = Math.ceil(filteredAssets.length / ITEMS_PER_PAGE);
-  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-  const endIndex = startIndex + ITEMS_PER_PAGE;
-  const currentAssets = filteredAssets.slice(startIndex, endIndex);
+  const handleSearch = async () => {
+    try {
+      setInitialLoading(true);
+      setAssets([]);
+      setHasMore(false);
+      
+      if (!searchQuery.trim()) {
+        await loadInitialAssets();
+        return;
+      }
 
-  // Handle asset click - navigate to detail page
+      const results = await YahooFinanceService.searchStocks(searchQuery);
+      
+      // Convert search results to Asset format
+      const searchAssets = (await Promise.all(
+        results.slice(0, 20).map(async (result: any) => {
+          try {
+            const quote = await YahooFinanceService.getQuote(result.symbol);
+            return {
+              symbol: quote.symbol,
+              name: quote.shortName || quote.longName || result.symbol,
+              price: quote.regularMarketPrice,
+              dailyChange: quote.regularMarketChangePercent,
+              volume: quote.regularMarketVolume,
+              marketCap: quote.marketCap || 0,
+            } as Asset;
+          } catch (err) {
+            return null;
+          }
+        })
+      )).filter((a): a is Asset => a !== null);
+
+      setAssets(searchAssets);
+    } catch (error) {
+      console.error("Search error:", error);
+      setAssets([]);
+    } finally {
+      setInitialLoading(false);
+    }
+  };
+
+  // Handle asset click - open chat
   const handleAssetClick = (asset: Asset) => {
     setSelectedAsset(asset);
-    // Add welcome message for this asset
     setMessages([
       {
         id: Date.now().toString(),
@@ -165,43 +172,10 @@ export default function MarketPage() {
     setSendingMessage(true);
 
     try {
-      // Get relevant data about the selected asset
-      let snapshot: any;
-      let priceChange: any;
-      let priceSummary: any;
-
-      try {
-        snapshot = await marketDataService.getSnapshot(selectedAsset.symbol);
-        priceChange = await marketDataService.getPriceChange(selectedAsset.symbol);
-        priceSummary = await marketDataService.getPriceSummary(selectedAsset.symbol);
-      } catch (dataError: any) {
-        console.warn("Using asset list data for AI response:", dataError.message);
-        // Use data from the asset list
-        snapshot = { latestTrade: { p: selectedAsset.price } };
-        priceChange = {
-          currentPrice: selectedAsset.price,
-          previousClose: selectedAsset.price / (1 + selectedAsset.dailyChange / 100),
-          change: selectedAsset.price * (selectedAsset.dailyChange / 100),
-          changePercent: selectedAsset.dailyChange,
-        };
-        priceSummary = {
-          symbol: selectedAsset.symbol,
-          currentPrice: selectedAsset.price,
-          dayHigh: selectedAsset.price * 1.02,
-          dayLow: selectedAsset.price * 0.98,
-          dayOpen: selectedAsset.price * (1 - selectedAsset.dailyChange / 200),
-          volume: selectedAsset.volume || 0,
-        };
-      }
-
-      // Generate AI response based on the question and data
-      const response = generateAIResponse(
-        message,
-        selectedAsset,
-        snapshot,
-        priceChange,
-        priceSummary
-      );
+      // Fetch fresh data
+      const quote = await YahooFinanceService.getQuote(selectedAsset.symbol);
+      
+      const response = generateAIResponse(message, selectedAsset, quote);
 
       const aiMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -225,27 +199,25 @@ export default function MarketPage() {
     }
   };
 
-  // Simple AI response generator (you can replace with actual AI API)
+  // Simple AI response generator
   const generateAIResponse = (
     question: string,
     asset: Asset,
-    _snapshot: any,
-    priceChange: any,
-    priceSummary: any
+    quote: any
   ): string => {
     const lowerQuestion = question.toLowerCase();
 
     if (lowerQuestion.includes("price") || lowerQuestion.includes("cost")) {
-      return `${asset.symbol} is currently trading at $${asset.price.toFixed(2)}. Today's high is $${priceSummary.dayHigh.toFixed(2)} and low is $${priceSummary.dayLow.toFixed(2)}.`;
+      return `${asset.symbol} is currently trading at $${quote.regularMarketPrice.toFixed(2)}. Today's high is $${quote.regularMarketDayHigh.toFixed(2)} and low is $${quote.regularMarketDayLow.toFixed(2)}.`;
     }
 
     if (lowerQuestion.includes("change") || lowerQuestion.includes("performance")) {
-      const changeSign = priceChange.change >= 0 ? "+" : "";
-      return `${asset.symbol} has ${priceChange.change >= 0 ? "gained" : "lost"} ${changeSign}$${priceChange.change.toFixed(2)} (${changeSign}${priceChange.changePercent.toFixed(2)}%) today. Previous close was $${priceChange.previousClose.toFixed(2)}.`;
+      const changeSign = quote.regularMarketChange >= 0 ? "+" : "";
+      return `${asset.symbol} has ${quote.regularMarketChange >= 0 ? "gained" : "lost"} ${changeSign}$${quote.regularMarketChange.toFixed(2)} (${changeSign}${quote.regularMarketChangePercent.toFixed(2)}%) today. Previous close was $${quote.regularMarketPreviousClose.toFixed(2)}.`;
     }
 
     if (lowerQuestion.includes("volume")) {
-      return `Today's trading volume for ${asset.symbol} is ${priceSummary.volume.toLocaleString()} shares.`;
+      return `Today's trading volume for ${asset.symbol} is ${quote.regularMarketVolume.toLocaleString()} shares.`;
     }
 
     if (lowerQuestion.includes("buy") || lowerQuestion.includes("invest")) {
@@ -253,7 +225,7 @@ export default function MarketPage() {
     }
 
     if (lowerQuestion.includes("high") || lowerQuestion.includes("low")) {
-      return `Today's trading range for ${asset.symbol}: High: $${priceSummary.dayHigh.toFixed(2)}, Low: $${priceSummary.dayLow.toFixed(2)}, Open: $${priceSummary.dayOpen.toFixed(2)}.`;
+      return `Today's trading range for ${asset.symbol}: High: $${quote.regularMarketDayHigh.toFixed(2)}, Low: $${quote.regularMarketDayLow.toFixed(2)}, Open: $${quote.regularMarketOpen.toFixed(2)}.`;
     }
 
     // Default response
@@ -275,261 +247,175 @@ export default function MarketPage() {
   };
 
   return (
+    <div className="container mx-auto px-4 py-6 h-[calc(100vh-64px)]">
+      <div className="flex flex-col h-full gap-4">
+        {/* Header */}
+        <div className="flex-shrink-0">
+          <h1 className="text-3xl font-bold mb-2">Market</h1>
+          <p className="text-default-500">
+            Browse tradable assets with real-time data from Yahoo Finance
+          </p>
+        </div>
 
-      <div className="container mx-auto px-4 py-6 h-[calc(100vh-64px)]">
-        <div className="flex flex-col h-full gap-4">
-          {/* Header */}
-          <div className="flex-shrink-0">
-            <h1 className="text-3xl font-bold mb-2">Market</h1>
-            <p className="text-default-500">
-              Browse tradable assets and get AI insights
-            </p>
+        {/* Filters */}
+        <div className="flex-shrink-0 flex gap-4 items-center">
+          <Input
+            placeholder="Search stocks..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            startContent={
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
+                className="w-5 h-5 text-default-400"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+                />
+              </svg>
+            }
+            isClearable
+            onClear={() => setSearchQuery("")}
+            className="flex-1"
+          />
+          
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant={category === "all" ? "solid" : "flat"}
+              color="primary"
+              onPress={() => setCategory("all")}
+            >
+              All
+            </Button>
+            <Button
+              size="sm"
+              variant={category === "tech" ? "solid" : "flat"}
+              color="primary"
+              onPress={() => setCategory("tech")}
+            >
+              Tech
+            </Button>
+            <Button
+              size="sm"
+              variant={category === "crypto" ? "solid" : "flat"}
+              color="primary"
+              onPress={() => setCategory("crypto")}
+            >
+              Crypto
+            </Button>
           </div>
 
-          {/* Main Content - Horizontal Layout */}
-          <div className="flex-1 flex gap-4 min-h-0">
-            {/* Left Side - Stock List (2/3) */}
-            <div className="flex-[2] flex flex-col min-w-0">
-              <Card className="flex-1 flex flex-col">
-                <CardHeader className="flex-shrink-0 pb-3">
-                  <div className="flex flex-col gap-3 w-full">
-                    {/* Search Bar */}
-                    <Input
-                      placeholder="Search by symbol or name..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      startContent={
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          strokeWidth={2}
-                          stroke="currentColor"
-                          className="w-5 h-5 text-default-400"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-                          />
-                        </svg>
-                      }
-                      isClearable
-                      onClear={() => setSearchQuery("")}
-                    />
+          <div className="flex gap-2">
+            <Chip size="sm" variant="flat">
+              Sort by:
+            </Chip>
+            <Button
+              size="sm"
+              variant={sortBy === "change" ? "solid" : "flat"}
+              color="secondary"
+              onPress={() => setSortBy("change")}
+            >
+              % Change
+            </Button>
+            <Button
+              size="sm"
+              variant={sortBy === "price" ? "solid" : "flat"}
+              color="secondary"
+              onPress={() => setSortBy("price")}
+            >
+              Price
+            </Button>
+          </div>
+        </div>
 
-                    {/* Stats */}
-                    <div className="flex gap-2 items-center">
-                      <Chip size="sm" variant="flat">
-                        {filteredAssets.length} Assets
-                      </Chip>
-                      {searchQuery && (
-                        <Chip size="sm" variant="flat" color="primary">
-                          Filtered: {filteredAssets.length} / {assets.length}
-                        </Chip>
-                      )}
-                    </div>
+        {/* Stats */}
+        <div className="flex-shrink-0">
+          <Chip size="sm" variant="flat" color="primary">
+            {assets.length} Assets Loaded
+          </Chip>
+        </div>
+
+        {/* Main Content - Horizontal Layout */}
+        <div className="flex-1 flex gap-4 min-h-0">
+          {/* Left Side - Stock List (2/3) */}
+          <div className="flex-[2] flex flex-col min-w-0">
+            {initialLoading ? (
+              <Card className="flex-1 flex items-center justify-center">
+                <CardBody>
+                  <div className="flex flex-col items-center gap-4">
+                    <Spinner size="lg" />
+                    <p className="text-default-500">Loading market data...</p>
                   </div>
-                </CardHeader>
+                </CardBody>
+              </Card>
+            ) : (
+              <InfiniteStockList
+                assets={assets}
+                loading={loading}
+                hasMore={hasMore}
+                onLoadMore={loadMoreAssets}
+                onAssetClick={(asset) => {
+                  navigate(`/asset/${asset.symbol}`);
+                }}
+              />
+            )}
+          </div>
 
-                <CardBody className="flex-1 overflow-hidden flex flex-col p-0">
-                  {loading ? (
-                    <div className="flex items-center justify-center h-full">
-                      <Spinner size="lg" />
+          {/* Right Side - Chat Box (1/3) */}
+          <div className="flex-[1] flex flex-col min-w-0">
+            <Card className="flex-1 flex flex-col">
+              <CardHeader className="flex-shrink-0 pb-3">
+                <div className="flex flex-col gap-2 w-full">
+                  <h2 className="text-xl font-bold">AI Assistant</h2>
+                  {selectedAsset ? (
+                    <div className="flex items-center gap-2">
+                      <Chip
+                        variant="flat"
+                        color="secondary"
+                        size="sm"
+                        classNames={{
+                          base: "font-mono font-bold",
+                        }}
+                      >
+                        {selectedAsset.symbol}
+                      </Chip>
+                      <span className="text-sm text-default-500 truncate">
+                        {selectedAsset.name}
+                      </span>
                     </div>
                   ) : (
-                    <>
-                      {/* Table Header */}
-                      <div className="flex-shrink-0 px-4 py-3 border-b border-divider">
-                        <div className="grid grid-cols-12 gap-4 text-sm font-medium text-default-500">
-                          <div className="col-span-2">Symbol</div>
-                          <div className="col-span-4">Name</div>
-                          <div className="col-span-2 text-right">Price</div>
-                          <div className="col-span-2 text-right">24h Change</div>
-                          <div className="col-span-2 text-right">Actions</div>
-                        </div>
-                      </div>
-
-                      {/* Asset List - Scrollable */}
-                      <div className="flex-1 overflow-y-auto px-4 py-2">
-                        {currentAssets.length === 0 ? (
-                          <div className="flex items-center justify-center h-full">
-                            <p className="text-default-400">
-                              {searchQuery
-                                ? "No assets match your search"
-                                : "No assets available"}
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {currentAssets.map((asset) => (
-                              <Card
-                                key={asset.symbol}
-                                isPressable
-                                className="hover:bg-default-100 transition-colors"
-                                shadow="sm"
-                              >
-                                <CardBody className="py-3">
-                                  <div className="grid grid-cols-12 gap-4 items-center">
-                                    {/* Symbol */}
-                                    <div className="col-span-2">
-                                      <Chip
-                                        variant="flat"
-                                        color="primary"
-                                        size="sm"
-                                        classNames={{
-                                          base: "font-mono font-bold",
-                                          content: "text-xs",
-                                        }}
-                                      >
-                                        {asset.symbol}
-                                      </Chip>
-                                    </div>
-
-                                    {/* Name */}
-                                    <div className="col-span-4">
-                                      <span className="text-sm font-medium text-foreground truncate block">
-                                        {asset.name}
-                                      </span>
-                                    </div>
-
-                                    {/* Price */}
-                                    <div className="col-span-2 text-right">
-                                      <span className="text-sm font-semibold text-foreground font-mono">
-                                        ${formatPrice(asset.price)}
-                                      </span>
-                                    </div>
-
-                                    {/* Daily change */}
-                                    <div className="col-span-2 text-right">
-                                      <Chip
-                                        variant="flat"
-                                        color={
-                                          asset.dailyChange >= 0
-                                            ? "success"
-                                            : "danger"
-                                        }
-                                        size="sm"
-                                        classNames={{
-                                          base: "font-mono",
-                                          content: "text-xs font-semibold",
-                                        }}
-                                      >
-                                        {formatChange(asset.dailyChange)}
-                                      </Chip>
-                                    </div>
-
-                                    {/* Actions */}
-                                    <div className="col-span-2 flex gap-1 justify-end">
-                                      <Button
-                                        size="sm"
-                                        color="secondary"
-                                        variant="flat"
-                                        onPress={() => handleAssetClick(asset)}
-                                      >
-                                        Ask AI
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        color="primary"
-                                        variant="flat"
-                                        onPress={() =>
-                                          handleNavigateToAsset(asset.symbol)
-                                        }
-                                      >
-                                        View
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </CardBody>
-                              </Card>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Pagination */}
-                      {totalPages > 1 && (
-                        <div className="flex-shrink-0 flex justify-center py-4 border-t border-divider">
-                          <div className="flex items-center gap-2">
-                            <Button
-                              size="sm"
-                              variant="flat"
-                              isDisabled={currentPage === 1}
-                              onPress={() => setCurrentPage(currentPage - 1)}
-                            >
-                              Previous
-                            </Button>
-                            <Chip variant="flat">
-                              Page {currentPage} of {totalPages}
-                            </Chip>
-                            <Button
-                              size="sm"
-                              variant="flat"
-                              isDisabled={currentPage === totalPages}
-                              onPress={() => setCurrentPage(currentPage + 1)}
-                            >
-                              Next
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </>
+                    <p className="text-sm text-default-500">
+                      Select a stock to start chatting
+                    </p>
                   )}
-                </CardBody>
-              </Card>
-            </div>
+                </div>
+              </CardHeader>
 
-            {/* Right Side - Chat Box (1/3) */}
-            <div className="flex-[1] flex flex-col min-w-0">
-              <Card className="flex-1 flex flex-col">
-                <CardHeader className="flex-shrink-0 pb-3">
-                  <div className="flex flex-col gap-2 w-full">
-                    <h2 className="text-xl font-bold">AI Assistant</h2>
-                    {selectedAsset ? (
-                      <div className="flex items-center gap-2">
-                        <Chip
-                          variant="flat"
-                          color="secondary"
-                          size="sm"
-                          classNames={{
-                            base: "font-mono font-bold",
-                          }}
-                        >
-                          {selectedAsset.symbol}
-                        </Chip>
-                        <span className="text-sm text-default-500 truncate">
-                          {selectedAsset.name}
-                        </span>
-                      </div>
-                    ) : (
-                      <p className="text-sm text-default-500">
-                        Select a stock to start chatting
-                      </p>
-                    )}
-                  </div>
-                </CardHeader>
-
-                <CardBody className="flex-1 overflow-hidden p-0">
-                  <div className="h-full">
-                    <ChatBox
-                      messages={messages}
-                      onSend={handleSendMessage}
-                      placeholder={
-                        selectedAsset
-                          ? `Ask about ${selectedAsset.symbol}...`
-                          : "Select a stock first..."
-                      }
-                      disabled={!selectedAsset || sendingMessage}
-                      className="h-full"
-                    />
-                  </div>
-                </CardBody>
-              </Card>
-            </div>
+              <CardBody className="flex-1 overflow-hidden p-0">
+                <div className="h-full">
+                  <ChatBox
+                    messages={messages}
+                    onSend={handleSendMessage}
+                    placeholder={
+                      selectedAsset
+                        ? `Ask about ${selectedAsset.symbol}...`
+                        : "Select a stock first..."
+                    }
+                    disabled={!selectedAsset || sendingMessage}
+                    className="h-full"
+                  />
+                </div>
+              </CardBody>
+            </Card>
           </div>
         </div>
       </div>
-
+    </div>
   );
 }
