@@ -349,3 +349,101 @@ def analyze_stock(request: StockAnalysisRequest):
     
     Example:
 ```json
+    {
+        "symbol": "AAPL",
+        "start_date": "2024-01-01",
+        "end_date": "2024-03-31"
+    }
+```
+    """
+    try:
+        result = stock_analyzer.run_full_analysis(
+            symbol=request.symbol,
+            start_date=request.start_date,
+            end_date=request.end_date
+        )
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stock/{symbol}/info")
+def get_stock_info(symbol: str):
+    """
+    Get basic company information for a stock.
+    
+    Example: GET /api/stock/AAPL/info
+    """
+    try:
+        info = stock_analyzer.get_company_info(symbol)
+        return info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stock/{symbol}/current")
+def get_current_price(symbol: str):
+    """
+    Get current stock price and basic stats.
+    
+    Example: GET /api/stock/AAPL/current
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        
+        return {
+            'symbol': symbol.upper(),
+            'current_price': info.get('currentPrice', info.get('regularMarketPrice', 0)),
+            'previous_close': info.get('previousClose', 0),
+            'change_pct': info.get('regularMarketChangePercent', 0),
+            'day_high': info.get('dayHigh', 0),
+            'day_low': info.get('dayLow', 0),
+            'volume': info.get('volume', 0),
+            'market_cap': info.get('marketCap', 0)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ========================================
+# EXAMPLE USAGE
+# ========================================
+
+if __name__ == "__main__":
+    # Test the analyzer
+    analyzer = StockAnalyzer(
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY")
+    )
+    
+    # Analyze AAPL's movement in Q1 2024
+    result = analyzer.run_full_analysis(
+        symbol="AAPL",
+        start_date="2024-01-01",
+        end_date="2024-03-31"
+    )
+    
+    print(f"\n{'='*60}")
+    print(f"STOCK ANALYSIS: {result.symbol}")
+    print(f"{'='*60}")
+    print(f"\nPeriod: {result.start_date} to {result.end_date}")
+    print(f"Price Movement: ${result.price_start:.2f} → ${result.price_end:.2f}")
+    print(f"Change: {result.price_change_pct*100:+.2f}% (${result.price_change_abs:+.2f})")
+    
+    print(f"\n📰 NEWS ARTICLES FOUND: {len(result.news_articles)}")
+    for article in result.news_articles[:3]:
+        print(f"  • {article['title']}")
+    
+    print(f"\n📊 ANALYSIS:")
+    print(result.analysis)
+    
+    print(f"\n🔑 KEY FACTORS:")
+    for factor in result.key_factors:
+        print(f"  • {factor}")
+    
+    print(f"\n💡 EDUCATIONAL INSIGHTS:")
+    for insight in result.educational_insights:
+        print(f"  • {insight}")
