@@ -19,7 +19,7 @@ class RiskAgent:
         portfolio_data = message.get("data", {})
         allocation = portfolio_data.get("allocation", {})
         
-        drift_analysis = self.calculate_drift(allocation)
+        drift_analysis = self.calculate_drisk(allocation)
         correlation_risk = self.assess_correlation_risk(portfolio_data)
         concentration_risk = self.assess_concentration_risk(allocation)
         
@@ -34,7 +34,7 @@ class RiskAgent:
                 "concentration": concentration_risk
             })
 
-    def calculate_drift(self, allocation: Dict) -> Dict:
+    def calculate_drisk(self, allocation: Dict) -> Dict:
         drift_data = {}
         for asset, current in allocation.items():
             target = allocation.get(f"{asset}_target", current)
@@ -130,4 +130,3 @@ class RiskAgent:
             "Strategy Agent",
             f"Strategy risk assessment complete. Expected volatility: {risk_assessment['expected_volatility']:.1f}%"
         )
-
