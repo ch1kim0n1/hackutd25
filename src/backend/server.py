@@ -59,6 +59,30 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Phase 1 testing"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "phase": "Phase 1 - Foundation"
+    }
+
+
+@app.get("/")
+async def root():
+    """Root endpoint with API info"""
+    return {
+        "name": "APEX API",
+        "description": "Multi-Agent Financial Investment System",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health"
+    }
+
 # CORS middleware for Electron frontend
 app.add_middleware(
     CORSMiddleware,
@@ -252,6 +276,79 @@ async def start_orchestrator(request: StartRequest):
         "message": "Orchestrator started successfully",
         "status": "running",
         "config": orchestrator.config
+    }
+
+
+# New: Phase 2 - War Room specific endpoints
+@app.post("/orchestrator/start")
+async def start_war_room_orchestrator(request: StartRequest):
+    """Start orchestrator with War Room broadcasting (Phase 2)"""
+    global orchestrator, orchestrator_task
+
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+
+    if orchestrator.is_running:
+        return {"message": "Orchestrator already running", "status": "running"}
+
+    # Broadcast start message to War Room
+    await manager.broadcast({
+        "type": "system",
+        "from": "system",
+        "to": "all",
+        "content": "🚀 Orchestrator starting... Agents assembling for discussion.",
+        "timestamp": datetime.now().isoformat(),
+        "data": {"config": request.config or {}}
+    })
+
+    # Update config if provided
+    if request.config:
+        orchestrator.config.update(request.config)
+        logger.info(f"Config updated: {request.config}")
+
+    # Start orchestrator in background
+    orchestrator_task = asyncio.create_task(orchestrator.start())
+
+    logger.info("▶️ Orchestrator started via War Room")
+
+    return {
+        "message": "Orchestrator started successfully",
+        "status": "running",
+        "config": orchestrator.config
+    }
+
+
+@app.post("/orchestrator/stop")
+async def stop_war_room_orchestrator():
+    """Stop orchestrator with War Room notification"""
+    global orchestrator, orchestrator_task
+
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+
+    if not orchestrator.is_running:
+        return {"message": "Orchestrator not running", "status": "stopped"}
+
+    # Broadcast stop message to War Room
+    await manager.broadcast({
+        "type": "system",
+        "from": "system",
+        "to": "all",
+        "content": "⏹️ Orchestrator stopped. Agent discussion ended.",
+        "timestamp": datetime.now().isoformat()
+    })
+
+    # Stop orchestrator
+    await orchestrator.stop()
+
+    if orchestrator_task:
+        orchestrator_task.cancel()
+
+    logger.info("⏹ Orchestrator stopped via War Room")
+
+    return {
+        "message": "Orchestrator stopped successfully",
+        "status": "stopped"
     }
 
 
