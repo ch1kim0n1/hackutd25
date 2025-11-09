@@ -7,78 +7,28 @@ from typing import Dict, Any, List
 from datetime import datetime
 import json
 import logging
+import sys
 
 from app.api.routes.orchestrator_routes import manager
-from app.api.routes import orchestrator
+# from app.api.routes import orchestrator  # Avoid circular import
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
-@router.websocket("/warroom")
-async def warroom_websocket(websocket: WebSocket):
-    """WebSocket endpoint for real-time War Room updates"""
-    await manager.connect(websocket)
-
+# Get orchestrator reference from parent module to avoid circular imports
+def get_orchestrator():
+    """Get orchestrator instance from parent routes module"""
     try:
-        # Send welcome message
-        await manager.send_personal(websocket, {
-            "type": "system",
-            "from": "system",
-            "to": "user",
-            "content": "Connected to APEX War Room",
-            "timestamp": datetime.now().isoformat()
-        })
+        routes_module = sys.modules.get('app.api.routes')
+        if routes_module and hasattr(routes_module, 'orchestrator'):
+            return routes_module.orchestrator
+        return None
+    except:
+        return None
 
-        # Send recent message history
-        if orchestrator:
-            recent_messages = await orchestrator.network.get_message_history(limit=20)
 
-            for msg in recent_messages:
-                await manager.send_personal(websocket, {
-                    "type": msg.get("type", "agent_message"),
-                    "from": msg.get("from", "system"),
-                    "to": msg.get("to", "all"),
-                    "content": msg.get("message", ""),
-                    "timestamp": msg.get("timestamp", datetime.now().isoformat()),
-                    "data": msg.get("data", {})
-                })
-
-        # Keep connection alive and handle incoming messages
-        while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-
-            # Handle user messages from War Room
-            if message.get("type") == "user_message":
-                # Publish to agent network
-                if orchestrator:
-                    await orchestrator.network.publish(
-                        topic="user_input",
-                        message={
-                            "type": "user_input",
-                            "action": "comment",
-                            "message": message.get("content", ""),
-                            "timestamp": datetime.now().isoformat()
-                        }
-                    )
-
-                # Broadcast to all clients
-                await manager.broadcast({
-                    "type": "user_input",
-                    "from": "user",
-                    "to": "all",
-                    "content": message.get("content", ""),
-                    "timestamp": datetime.now().isoformat()
-                })
-
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        logger.info("Client disconnected from War Room")
-
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        manager.disconnect(websocket)
+# The complex warroom WebSocket is now replaced by the simple agent_chat WebSocket
+# This keeps backward compatibility but directs to the new system
 
 
 # Background task to relay Redis messages to WebSocket clients

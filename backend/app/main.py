@@ -93,12 +93,14 @@ def create_application() -> FastAPI:
         allow_credentials=True,
         allow_methods=settings.CORS_ALLOW_METHODS,
         allow_headers=settings.CORS_ALLOW_HEADERS,
+        expose_headers=["*"],
         max_age=600,  # 10 minutes
     )
 
     # Include routers
     app.include_router(api_router, prefix="/api/v1")
-    app.include_router(websocket_router, prefix="/ws")
+    # WebSocket router commented out - using agent_chat WebSocket instead
+    # app.include_router(websocket_router, prefix="/ws")
 
     # Health check endpoints
     @app.get("/health")
@@ -137,6 +139,7 @@ def create_application() -> FastAPI:
             "health": "/health",
             "ready": "/ready"
         }
+
 
     @app.middleware("http")
     async def add_request_id(request: Request, call_next):

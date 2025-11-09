@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # CORS
     # ============================================================================
     CORS_ORIGINS: List[str] = Field(
-        default=["http://localhost:5173", "http://localhost:3000"],
+        default=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
         description="Allowed CORS origins"
     )
     CORS_ALLOW_CREDENTIALS: bool = True
@@ -44,8 +44,8 @@ class Settings(BaseSettings):
     # Database
     # ============================================================================
     DATABASE_URL: str = Field(
-        default="sqlite+aiosqlite:///./apex_demo.db",
-        description="Database connection URL (PostgreSQL or SQLite)"
+        default="postgresql+asyncpg://apex_user:apex_password@localhost:5432/apex_db",
+        description="PostgreSQL connection URL"
     )
     DB_POOL_SIZE: int = Field(default=10, description="Database connection pool size")
     DB_MAX_OVERFLOW: int = Field(default=20, description="Max overflow connections")
@@ -178,14 +178,6 @@ class Settings(BaseSettings):
     GPU_DEVICE_ID: int = Field(default=0, description="GPU device ID")
 
     # ============================================================================
-    # Demo Mode
-    # ============================================================================
-    DEMO_MODE: bool = Field(
-        default=True,
-        description="Enable demo mode (uses mock data, no API keys required)"
-    )
-
-    # ============================================================================
     # Feature Flags
     # ============================================================================
     ENABLE_CRASH_SIMULATOR: bool = Field(
@@ -198,7 +190,7 @@ class Settings(BaseSettings):
     )
 
     class Config:
-        env_file = "../../../.env"  # Load from project root
+        env_file = "../../.env"  # Load from root
         env_file_encoding = "utf-8"
         env_prefix = "BACKEND_"  # All env vars prefixed with BACKEND_
         case_sensitive = False
@@ -240,13 +232,13 @@ def validate_settings() -> None:
     if is_production() and "CHANGEME" in settings.JWT_SECRET_KEY:
         errors.append("JWT_SECRET_KEY must be changed in production")
 
-    # Check required API keys (skip in demo mode)
-    if not settings.DEMO_MODE:
+    # Only require API keys in production or if explicitly set
+    if is_production():
         if not settings.OPENROUTER_API_KEY:
-            errors.append("OPENROUTER_API_KEY is required for agent operations")
+            errors.append("OPENROUTER_API_KEY is required for agent operations in production")
 
         if not settings.ALPACA_API_KEY or not settings.ALPACA_SECRET_KEY:
-            errors.append("ALPACA_API_KEY and ALPACA_SECRET_KEY are required for trading")
+            errors.append("ALPACA_API_KEY and ALPACA_SECRET_KEY are required for trading in production")
 
     # Validate URLs
     if not settings.API_BASE_URL.startswith(("http://", "https://")):

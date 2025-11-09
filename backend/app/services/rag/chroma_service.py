@@ -6,11 +6,11 @@ Handles vector storage and semantic search for historical market data, news, and
 import os
 from typing import List, Dict, Optional, Any
 from datetime import datetime
-from enum import Enum
 import chromadb
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
+from enum import Enum
 
 class ChromaService:
     """Service for managing vector embeddings and semantic search"""
@@ -24,8 +24,12 @@ class ChromaService:
         """
         self.persist_directory = persist_directory
 
-        # Initialize ChromaDB client with new format
-        self.client = chromadb.PersistentClient(path=persist_directory)
+        # Initialize ChromaDB client
+        self.client = chromadb.Client(Settings(
+            chroma_db_impl="duckdb+parquet",
+            persist_directory=persist_directory,
+            anonymized_telemetry=False
+        ))
 
         # Initialize embedding function (sentence-transformers)
         # Using all-MiniLM-L6-v2: Fast, good quality, 384 dimensions

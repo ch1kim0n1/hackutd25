@@ -6,11 +6,11 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from app.services.db import AsyncSessionLocal
-from app.models.user import User
-from app.models.portfolio import Portfolio
-from app.models.goal import Goal
-from app.services.security import PasswordService
+from services.postgres_db import AsyncSessionLocal
+from models.user import User
+from models.portfolio import Portfolio
+from models.goal import Goal
+from services.security import PasswordService
 
 
 async def seed_test_data():

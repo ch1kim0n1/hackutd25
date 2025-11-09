@@ -1,0 +1,6 @@
+# Voice Processing Dependencies (Optional)
+# Install only if using voice features
+# Usage: pip install -r requirements-voice.txt
+
+faster-whisper>=0.10.0
+edge-tts>=6.1.0

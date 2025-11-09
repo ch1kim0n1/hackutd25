@@ -1,0 +1,6 @@
+# GPU Dependencies (Optional)
+# Install only if you have CUDA 12.x available
+# Usage: pip install -r requirements-gpu.txt
+
+cupy-cuda12x==12.3.0
+torch==2.1.1

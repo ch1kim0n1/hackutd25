@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+<body>
+    <h1>WebSocket Connection Test</h1>
+    <div id="status">Connecting...</div>
+    <div id="messages"></div>
+
+    <script>
+        const wsUrl = 'ws://localhost:8000/api/v1/chat/';
+        console.log('Attempting to connect to:', wsUrl);
+
+        const ws = new WebSocket(wsUrl);
+
+        ws.onopen = function(event) {
+            console.log('WebSocket connected!', event);
+            document.getElementById('status').innerHTML = '✅ Connected!';
+            document.getElementById('status').style.color = 'green';
+
+            // Send start session message
+            ws.send(JSON.stringify({
+                type: "start_session",
+                timestamp: new Date().toISOString()
+            }));
+        };
+
+        ws.onmessage = function(event) {
+            console.log('Message received:', event.data);
+            const messagesDiv = document.getElementById('messages');
+            const msgDiv = document.createElement('div');
+            msgDiv.textContent = 'Message: ' + event.data;
+            messagesDiv.appendChild(msgDiv);
+        };
+
+        ws.onerror = function(error) {
+            console.error('WebSocket error:', error);
+            document.getElementById('status').innerHTML = '❌ Error: ' + error;
+            document.getElementById('status').style.color = 'red';
+        };
+
+        ws.onclose = function(event) {
+            console.log('WebSocket closed:', event);
+            document.getElementById('status').innerHTML = '❌ Closed: Code=' + event.code + ', Reason=' + event.reason;
+            document.getElementById('status').style.color = 'orange';
+        };
+    </script>
+</body>
+</html>

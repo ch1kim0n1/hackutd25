@@ -20,16 +20,16 @@ class FinanceAdapter:
         
         if self.use_real_plaid:
             try:
-                from app.services.plaid_integration import PlaidIntegration
+                from services.plaid_integration import PlaidIntegration
                 self.plaid_service = PlaidIntegration()
                 logger.info("✅ Using REAL Plaid integration")
             except Exception as e:
                 logger.warning(f"Failed to initialize real Plaid: {e}. Falling back to mock.")
                 self.use_real_plaid = False
-                from app.services.mock_plaid import mock_plaid_data
+                from services.mock_plaid import mock_plaid_data
                 self.mock_plaid = mock_plaid_data
         else:
-            from app.services.mock_plaid import mock_plaid_data
+            from services.mock_plaid import mock_plaid_data
             self.mock_plaid = mock_plaid_data
             logger.info("📋 Using mock Plaid data (no credentials)")
 
