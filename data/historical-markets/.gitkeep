@@ -1,0 +1,2 @@
+# Historical market data cache
+# JSON files will be stored here after running the data loader

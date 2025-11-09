@@ -1,0 +1,17 @@
+"""
+Test dependencies and requirements.
+Install with: pip install -r tests/requirements.txt
+"""
+
+# Core testing framework
+pytest>=7.0.0
+pytest-asyncio>=0.20.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+pytest-xdist>=3.0.0  # Parallel test execution
+
+# Async support
+asyncio-contextmanager>=1.0.0
+
+# HTTP testing
+httpx>=0.23.0
