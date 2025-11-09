@@ -18,6 +18,14 @@ from agents.executor_agent import ExecutorAgent
 from agents.explainer_agent import ExplainerAgent
 from agents.user_agent import UserAgent
 
+# Output Refinement System
+try:
+    from output_refinement_pipeline import RefinementPipeline
+    REFINEMENT_AVAILABLE = True
+except ImportError:
+    REFINEMENT_AVAILABLE = False
+    print("⚠️  Output Refinement Pipeline not available")
+
 
 class OrchestratorState(Enum):
     """State machine states for orchestrator workflow"""
@@ -81,12 +89,21 @@ class Orchestrator:
             "scan_interval": 300,  # 5 minutes
             "max_retries": 3,
             "user_timeout": 60,  # seconds to wait for user input
-            "enable_auto_execute": False  # Require user approval for trades
+            "enable_auto_execute": False,  # Require user approval for trades
+            "refinement": {
+                "enabled": REFINEMENT_AVAILABLE,
+                "explanation_level": "beginner",  # beginner/intermediate/advanced
+                "max_terms_per_output": 10,
+                "format": "terminal"  # terminal/web/both
+            }
         }
 
         # Error tracking
         self.error_count = 0
         self.max_errors = 10
+
+        # Output Refinement Pipeline
+        self.refinement_pipeline = None
 
     async def initialize(self):
         """Initialize the orchestrator and all agents"""
@@ -107,6 +124,21 @@ class Orchestrator:
                 self.logger.info("✓ User Agent initialized")
             except Exception as e:
                 self.logger.warning(f"⚠ User Agent not available: {e}")
+
+            # Initialize Output Refinement Pipeline
+            if REFINEMENT_AVAILABLE and self.config["refinement"]["enabled"]:
+                try:
+                    self.refinement_pipeline = RefinementPipeline(
+                        explanation_level=self.config["refinement"]["explanation_level"],
+                        max_terms=self.config["refinement"]["max_terms_per_output"]
+                    )
+                    self.logger.info("✓ Output Refinement Pipeline initialized")
+                    stats = self.refinement_pipeline.get_stats()
+                    self.logger.info(f"   Glossary terms: {stats['glossary_terms']}")
+                    self.logger.info(f"   Explanation level: {stats['explanation_level']}")
+                except Exception as e:
+                    self.logger.warning(f"⚠ Refinement Pipeline failed: {e}")
+                    self.refinement_pipeline = None
 
             self.state = OrchestratorState.IDLE
             self.logger.info("✅ Orchestrator ready")
@@ -291,10 +323,16 @@ class Orchestrator:
             explanation = await self._run_explanation(execution_result)
             self.current_decision["explanation"] = explanation
 
+            # Use refined output if available, otherwise use original
+            if explanation.get("refined"):
+                display_message = explanation["refined"]["terminal"]
+            else:
+                display_message = f"📝 {explanation.get('summary', 'Trades executed successfully.')}"
+
             await self.network.broadcast_agent_communication(
                 from_agent="explainer",
                 to_agent="user",
-                message=f"📝 {explanation.get('summary', 'Trades executed successfully.')}"
+                message=display_message
             )
 
             # Save successful decision to history
@@ -386,13 +424,36 @@ class Orchestrator:
             return None
 
     async def _run_explanation(self, execution_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Run explainer agent"""
+        """Run explainer agent with output refinement"""
         try:
             self.logger.info("💬 Generating explanation...")
 
             explanation = await self.agents["explainer"].explain_trades(
                 execution_result=execution_result
             )
+
+            # Apply output refinement if enabled
+            if self.refinement_pipeline and explanation.get("summary"):
+                self.logger.info("✨ Refining output...")
+
+                refined = self.refinement_pipeline.refine(
+                    text=explanation["summary"],
+                    format=self.config["refinement"]["format"]
+                )
+
+                # Add refined versions to explanation
+                explanation["refined"] = {
+                    "terminal": refined.terminal_output,
+                    "web_html": refined.web_html,
+                    "web_json": refined.web_json,
+                    "markdown": refined.markdown,
+                    "detected_terms": refined.detected_terms,
+                    "definitions": refined.definitions
+                }
+
+                self.logger.info(f"   Detected {len(refined.detected_terms)} terms")
+                self.logger.info(f"   Provided {len(refined.definitions)} definitions")
+
             return explanation
 
         except Exception as e:
