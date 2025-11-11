@@ -5,8 +5,10 @@ Provides REST API and WebSocket endpoints with security hardening
 
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 import io
 import os
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form, Query, Depends, status, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -36,7 +38,59 @@ from api.auth import get_current_user, login_user, refresh_access_token, logout_
 from services.historical_data import HistoricalDataLoader
 
 
+# Configure file logging with rotation
+def setup_file_logging():
+    """
+    Configure file logging with rotation.
+    Logs are stored in logs/apex.log with automatic rotation.
+    """
+    # Create logs directory if it doesn't exist
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+
+    # Create rotating file handler (10MB per file, keep 5 backups)
+    file_handler = RotatingFileHandler(
+        logs_dir / "apex.log",
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+
+    # Create console handler
+    console_handler = logging.StreamHandler()
+
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # Set formatter for both handlers
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # Remove existing handlers to avoid duplicates
+    root_logger.handlers.clear()
+
+    # Add both handlers
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+    # Set log level based on environment
+    if os.getenv("ENVIRONMENT") == "development":
+        root_logger.setLevel(logging.DEBUG)
+    else:
+        root_logger.setLevel(logging.INFO)
+
+    return root_logger
+
+
 # Initialize logging
+setup_file_logging()
 logger = logging.getLogger(__name__)
 
 # Pydantic models for API requests/responses
@@ -81,6 +135,82 @@ app = FastAPI(
 
 # Setup global exception handlers
 setup_exception_handlers(app)
+
+
+# Environment variable validation
+def validate_environment():
+    """
+    Validate required environment variables on startup.
+    Raises RuntimeError if critical variables are missing.
+    """
+    required_vars = {
+        "JWT_SECRET_KEY": "JWT secret for authentication",
+        "ALPACA_API_KEY": "Alpaca trading API key",
+        "ALPACA_SECRET_KEY": "Alpaca trading secret key",
+    }
+
+    recommended_vars = {
+        "OPENAI_API_KEY": "OpenAI API key (for AI features)",
+        "ANTHROPIC_API_KEY": "Anthropic API key (for Claude)",
+        "ENCRYPTION_KEY": "Credential encryption key",
+    }
+
+    missing_required = []
+    missing_recommended = []
+
+    # Check required variables
+    for var, description in required_vars.items():
+        value = os.getenv(var)
+        if not value or value.strip() == "":
+            missing_required.append((var, description))
+            logger.error(f"❌ Missing required environment variable: {var} - {description}")
+        else:
+            logger.info(f"✅ {var} is set")
+
+    # Check recommended variables
+    for var, description in recommended_vars.items():
+        value = os.getenv(var)
+        if not value or value.strip() == "":
+            missing_recommended.append((var, description))
+            logger.warning(f"⚠️  Missing recommended environment variable: {var} - {description}")
+        else:
+            logger.info(f"✅ {var} is set")
+
+    # Raise error if required variables are missing
+    if missing_required:
+        error_msg = "Missing required environment variables:\n"
+        for var, desc in missing_required:
+            error_msg += f"  - {var}: {desc}\n"
+        error_msg += "\nPlease set these variables in your .env file or environment.\n"
+        error_msg += "Copy .env.example to .env and fill in your values:\n"
+        error_msg += "  cp .env.example .env"
+        raise RuntimeError(error_msg)
+
+    # Warn about recommended variables
+    if missing_recommended:
+        logger.warning("⚠️  Some recommended environment variables are missing.")
+        logger.warning("   The application will work but some features may be unavailable:")
+        for var, desc in missing_recommended:
+            logger.warning(f"   - {var}: {desc}")
+
+    logger.info("✅ Environment validation complete!")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    FastAPI startup event handler.
+    Validates environment before starting the server.
+    """
+    logger.info("=" * 60)
+    logger.info("APEX Backend Starting")
+    logger.info("=" * 60)
+
+    # Validate environment variables
+    validate_environment()
+
+    logger.info("Server initialization complete")
+    logger.info("=" * 60)
 
 # HTTPS enforcement (enable in production)
 if os.getenv("FORCE_HTTPS", "false").lower() == "true":
@@ -388,10 +518,10 @@ async def logout(background_tasks: BackgroundTasks, request: Request):
 async def get_me(request: Request):
     """
     Get current authenticated user info
-    
+
     Header:
         Authorization: Bearer <access_token>
-    
+
     Returns:
         {
             "id": "uuid",
@@ -401,21 +531,112 @@ async def get_me(request: Request):
         }
     """
     from services.auth import get_current_user
-    
+
     auth_header = request.headers.get("authorization", "")
-    
+
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
-    
+
     token_str = auth_header[7:]
     user = await get_current_user(token_str)
-    
+
     return {
         "id": str(user.id),
         "username": user.username,
         "email": user.email,
         "created_at": user.created_at.isoformat()
     }
+
+
+class UserRegistrationRequest(BaseModel):
+    """User registration request model"""
+    username: str
+    email: str
+    password: str
+
+
+@app.post("/auth/register")
+async def register_user(registration: UserRegistrationRequest):
+    """
+    Register a new user account
+
+    Request body:
+        {
+            "username": "newuser",
+            "email": "user@example.com",
+            "password": "secure_password"
+        }
+
+    Returns:
+        {
+            "message": "User created successfully",
+            "user_id": "uuid",
+            "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+            "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+            "token_type": "bearer"
+        }
+    """
+    from services.dao.json_dao import UserDAO
+    from services.security import PasswordService
+    from services.jwt_service import JWTService
+    import os
+
+    user_dao = UserDAO()
+    password_service = PasswordService()
+    jwt_service = JWTService(secret_key=os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production"))
+
+    # Validate username doesn't exist
+    existing_user = user_dao.get_user_by_username(registration.username)
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Username already exists"
+        )
+
+    # Validate email doesn't exist
+    existing_email = user_dao.get_user_by_email(registration.email)
+    if existing_email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already exists"
+        )
+
+    # Hash password
+    hashed_password = password_service.hash_password(registration.password)
+
+    # Create user
+    user_data = {
+        "username": registration.username,
+        "email": registration.email,
+        "hashed_password": hashed_password,
+        "is_active": True,
+        "is_verified": False,
+        "risk_tolerance": "moderate",
+        "investment_experience": "beginner"
+    }
+
+    try:
+        user = user_dao.create_user(user_data)
+
+        # Generate tokens for immediate login
+        access_token = jwt_service.create_access_token({"sub": str(user.id), "type": "access"})
+        refresh_token = jwt_service.create_refresh_token({"sub": str(user.id), "type": "refresh"})
+
+        logger.info(f"✅ New user registered: {registration.username}")
+
+        return {
+            "message": "User created successfully",
+            "user_id": str(user.id),
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+    except Exception as e:
+        logger.error(f"Error creating user: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create user: {str(e)}"
+        )
 
 
 @app.post("/api/start")
@@ -672,17 +893,14 @@ async def submit_user_input(input_data: UserInput):
 
 
 @app.get("/api/portfolio")
-async def get_portfolio(request: Request, auth_data: dict = Depends(lambda: None)):
+async def get_portfolio(current_user: dict = Depends(get_current_user)):
     """
     Get user's portfolio information.
-    
+
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
+    user_id = current_user.id
     
     if not alpaca_broker:
         raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
@@ -783,17 +1001,14 @@ class TradeRequest(BaseModel):
 
 
 @app.post("/api/trade")
-async def place_trade(request: Request, trade: TradeRequest, auth_data: dict = Depends(lambda: None)):
+async def place_trade(trade: TradeRequest, current_user = Depends(get_current_user)):
     """
     Place a buy or sell order.
-    
+
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
+    user_id = current_user.id
     
     if not alpaca_broker:
         raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
@@ -843,13 +1058,8 @@ async def place_trade(request: Request, trade: TradeRequest, auth_data: dict = D
 
 
 @app.get("/api/finance/accounts")
-async def get_finance_accounts(request: Request, auth_data: dict = Depends(lambda: None)):
+async def get_finance_accounts(current_user = Depends(get_current_user)):
     """Get user's financial accounts (requires authentication)"""
-    from middleware.auth import get_current_user_from_request
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     RequestLogger.log_request(structured_logger, "get_finance_accounts", user_id=str(user_id))
     
     if not finance_adapter:
@@ -860,13 +1070,8 @@ async def get_finance_accounts(request: Request, auth_data: dict = Depends(lambd
 
 
 @app.get("/api/finance/transactions")
-async def get_finance_transactions(request: Request, days: int = 90, auth_data: dict = Depends(lambda: None)):
+async def get_finance_transactions(days: int = 90, current_user = Depends(get_current_user)):
     """Get user's financial transactions (requires authentication)"""
-    from middleware.auth import get_current_user_from_request
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     RequestLogger.log_request(structured_logger, "get_finance_transactions", user_id=str(user_id))
     
     if not finance_adapter:
@@ -877,13 +1082,8 @@ async def get_finance_transactions(request: Request, days: int = 90, auth_data: 
 
 
 @app.get("/api/finance/subscriptions")
-async def get_subscriptions(request: Request, auth_data: dict = Depends(lambda: None)):
+async def get_subscriptions(current_user = Depends(get_current_user)):
     """Get user's subscriptions (requires authentication)"""
-    from middleware.auth import get_current_user_from_request
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     RequestLogger.log_request(structured_logger, "get_subscriptions", user_id=str(user_id))
     
     if not finance_adapter:
@@ -901,13 +1101,8 @@ async def get_subscriptions(request: Request, auth_data: dict = Depends(lambda: 
 
 
 @app.get("/api/finance/net-worth")
-async def get_net_worth(request: Request, auth_data: dict = Depends(lambda: None)):
+async def get_net_worth(current_user = Depends(get_current_user)):
     """Get user's net worth (requires authentication)"""
-    from middleware.auth import get_current_user_from_request
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     RequestLogger.log_request(structured_logger, "get_net_worth", user_id=str(user_id))
     
     if not finance_adapter:
@@ -916,13 +1111,8 @@ async def get_net_worth(request: Request, auth_data: dict = Depends(lambda: None
 
 
 @app.get("/api/finance/cash-flow")
-async def get_cash_flow(request: Request, days: int = 30, auth_data: dict = Depends(lambda: None)):
+async def get_cash_flow(days: int = 30, current_user = Depends(get_current_user)):
     """Get user's cash flow (requires authentication)"""
-    from middleware.auth import get_current_user_from_request
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     RequestLogger.log_request(structured_logger, "get_cash_flow", user_id=str(user_id))
     
     if not finance_adapter:
@@ -931,13 +1121,8 @@ async def get_cash_flow(request: Request, days: int = 30, auth_data: dict = Depe
 
 
 @app.get("/api/finance/health-score")
-async def get_health_score(request: Request, auth_data: dict = Depends(lambda: None)):
+async def get_health_score(current_user = Depends(get_current_user)):
     """Get user's financial health score (requires authentication)"""
-    from middleware.auth import get_current_user_from_request
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     RequestLogger.log_request(structured_logger, "get_health_score", user_id=str(user_id))
     
     if not finance_adapter:
@@ -961,7 +1146,7 @@ async def get_finance_status():
 async def create_plaid_link_token(
     request: Request,
     redirect_uri: Optional[str] = None,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Create a Plaid Link token for account connection flow.
@@ -971,12 +1156,7 @@ async def create_plaid_link_token(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.plaid_integration import PlaidIntegration
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         plaid = PlaidIntegration()
         token_data = await plaid.create_link_token(str(user_id), redirect_uri)
@@ -998,7 +1178,7 @@ async def create_plaid_link_token(
 async def exchange_plaid_token(
     request: Request,
     public_token: str,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Exchange Plaid public token for access token and save credentials.
@@ -1009,14 +1189,9 @@ async def exchange_plaid_token(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.plaid_integration import PlaidIntegration
     from services.postgres_db import AsyncSessionLocal
     from services.dao.user_dao import UserDAO
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         plaid = PlaidIntegration()
         access_token = await plaid.exchange_public_token(str(user_id), public_token)
@@ -1054,7 +1229,7 @@ async def exchange_plaid_token(
 @app.get("/api/plaid/accounts")
 async def get_plaid_accounts(
     request: Request,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Retrieve linked bank accounts from Plaid.
@@ -1062,14 +1237,9 @@ async def get_plaid_accounts(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.plaid_integration import PlaidIntegration
     from services.postgres_db import AsyncSessionLocal
     from services.dao.user_dao import UserDAO
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         # Get stored Plaid access token
         async with AsyncSessionLocal() as db:
@@ -1109,7 +1279,7 @@ async def get_plaid_accounts(
 async def get_plaid_transactions(
     request: Request,
     days: int = 90,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Retrieve transactions from linked bank accounts via Plaid.
@@ -1120,14 +1290,9 @@ async def get_plaid_transactions(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.plaid_integration import PlaidIntegration
     from services.postgres_db import AsyncSessionLocal
     from services.dao.user_dao import UserDAO
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     # Validate days parameter
     if days < 1 or days > 730:
         raise HTTPException(status_code=400, detail="Days must be between 1 and 730")
@@ -1194,7 +1359,7 @@ async def create_goal(
     category: str,
     description: str = None,
     priority: str = "medium",
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Create a new financial goal.
@@ -1210,14 +1375,9 @@ async def create_goal(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.dao.goal_dao import GoalDAO
     from services.postgres_db import AsyncSessionLocal
     from datetime import datetime as dt
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         # Parse target date
         try:
@@ -1265,7 +1425,7 @@ async def create_goal(
 async def get_user_goals(
     request: Request,
     status: str = None,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Get all goals for the user.
@@ -1276,13 +1436,8 @@ async def get_user_goals(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.dao.goal_dao import GoalDAO
     from services.postgres_db import AsyncSessionLocal
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         async with AsyncSessionLocal() as db:
             if status:
@@ -1317,17 +1472,12 @@ async def get_user_goals(
 async def get_goal(
     goal_id: str,
     request: Request,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """Get a specific goal with full details"""
-    from middleware.auth import get_current_user_from_request
     from services.dao.goal_dao import GoalDAO
     from services.postgres_db import AsyncSessionLocal
     from uuid import UUID
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         async with AsyncSessionLocal() as db:
             goal = await GoalDAO.get_by_id(db, UUID(goal_id))
@@ -1369,18 +1519,13 @@ async def update_goal(
     priority: str = None,
     status: str = None,
     description: str = None,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """Update a goal"""
-    from middleware.auth import get_current_user_from_request
     from services.dao.goal_dao import GoalDAO
     from services.postgres_db import AsyncSessionLocal
     from uuid import UUID
     from datetime import datetime as dt
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         # Build update dict
         update_data = {}
@@ -1431,17 +1576,12 @@ async def update_goal(
 async def delete_goal(
     goal_id: str,
     request: Request,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """Delete a goal"""
-    from middleware.auth import get_current_user_from_request
     from services.dao.goal_dao import GoalDAO
     from services.postgres_db import AsyncSessionLocal
     from uuid import UUID
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         async with AsyncSessionLocal() as db:
             success = await GoalDAO.delete(db, UUID(goal_id), user_id)
@@ -1470,17 +1610,12 @@ async def update_goal_progress(
     goal_id: str,
     current_amount: float,
     request: Request,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """Update goal progress (current amount saved)"""
-    from middleware.auth import get_current_user_from_request
     from services.dao.goal_dao import GoalDAO
     from services.postgres_db import AsyncSessionLocal
     from uuid import UUID
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         async with AsyncSessionLocal() as db:
             goal = await GoalDAO.update_progress(
@@ -1715,7 +1850,7 @@ async def execute_voice_command(
     command_type: str,
     symbol: str,
     quantity: float,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Execute a voice command (with automatic rate limiting and confirmation).
@@ -1726,15 +1861,10 @@ async def execute_voice_command(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.voice_security import (
         voice_command_tracker, VoiceCommandValidator, CommandType, VoiceCommandLogger
     )
     import uuid
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         # Check rate limit (5 commands per minute)
         is_allowed, error = voice_command_tracker.check_rate_limit(user_id)
@@ -1801,7 +1931,7 @@ async def confirm_voice_command(
     request: Request,
     command_id: str,
     confirmation_phrase: str,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Confirm a pending voice command with explicit confirmation phrase.
@@ -1816,12 +1946,7 @@ async def confirm_voice_command(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.voice_security import voice_command_tracker, VoiceCommandLogger
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         # Confirm the command
         success, error = voice_command_tracker.confirm_command(
@@ -1863,7 +1988,7 @@ async def confirm_voice_command(
 async def reject_voice_command(
     request: Request,
     command_id: str,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Reject a pending voice command.
@@ -1871,12 +1996,7 @@ async def reject_voice_command(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.voice_security import voice_command_tracker, VoiceCommandLogger
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         success, error = voice_command_tracker.reject_command(user_id, command_id)
         
@@ -1908,7 +2028,7 @@ async def reject_voice_command(
 @app.get("/api/voice/pending-commands")
 async def get_pending_commands(
     request: Request,
-    auth_data: dict = Depends(lambda: None)
+    current_user = Depends(get_current_user)
 ):
     """
     Get all pending voice commands for the user.
@@ -1916,12 +2036,7 @@ async def get_pending_commands(
     Requires authentication header:
         Authorization: Bearer <access_token>
     """
-    from middleware.auth import get_current_user_from_request
     from services.voice_security import voice_command_tracker
-    
-    auth_data = await get_current_user_from_request(request)
-    user_id = auth_data['user_id']
-    
     try:
         pending_cmds = voice_command_tracker.list_pending_commands(user_id)
         

@@ -9,14 +9,14 @@ from fastapi import HTTPException, Depends, status
 from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime, timedelta
 import jwt
-from backend.services.security import PasswordService, JWTService
-from backend.services.dao.user_dao import UserDAO
+from services.security import PasswordService, JWTService
+from services.dao.json_dao import UserDAO
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Initialize services
-jwt_service = JWTService(secret_key=os.getenv("JWT_SECRET_KEY"))
+jwt_service = JWTService(secret_key=os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production"))
 password_service = PasswordService()
 user_dao = UserDAO()
 
@@ -29,26 +29,26 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 async def login_user(username: str, password: str) -> Dict:
     """
     Authenticate user and return access + refresh tokens.
-    
+
     Args:
         username: User's username
         password: User's plaintext password
-    
+
     Returns:
         {"access_token": str, "refresh_token": str, "token_type": "bearer"}
-    
+
     Raises:
         HTTPException(401): Invalid credentials
     """
     try:
-        user = await user_dao.get_by_username(username)
+        user = user_dao.get_user_by_username(username)
         if not user:
             logger.warning(f"Login failed: user {username} not found")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username or password"
             )
-        
+
         # Verify password
         if not password_service.verify_password(password, user.hashed_password):
             logger.warning(f"Login failed: invalid password for {username}")
@@ -56,20 +56,20 @@ async def login_user(username: str, password: str) -> Dict:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username or password"
             )
-        
+
         # Create tokens
         access_token = jwt_service.create_access_token({"sub": str(user.id), "type": "access"})
         refresh_token = jwt_service.create_refresh_token({"sub": str(user.id), "type": "refresh"})
-        
+
         logger.info(f"User {username} logged in successfully")
-        
+
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer",
             "expires_in": jwt_service.access_token_expire_minutes * 60
         }
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -185,7 +185,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             raise credentials_exception
         
         # Load user from database
-        user = await user_dao.get_by_id(user_id)
+        user = user_dao.get_user_by_id(user_id)
         if not user:
             logger.warning(f"User {user_id} not found")
             raise credentials_exception
