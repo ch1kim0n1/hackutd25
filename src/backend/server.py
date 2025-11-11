@@ -9,9 +9,8 @@ from logging.handlers import RotatingFileHandler
 import io
 import os
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form, Query, Depends, status, Request, BackgroundTasks
+from fastapi import FastAPI, WebSocket, HTTPException, UploadFile, File, Form, Query, Depends, status, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -25,7 +24,7 @@ import json
 from orchestrator import Orchestrator, OrchestratorState
 from core.agent_network import AgentNetwork
 from services.voice import VoiceService
-from engines.crash_simulator import CrashScenario, simulate_crash
+from engines.crash_simulator import simulate_crash
 from engines.crash_scenario_engine import CrashScenarioEngine
 from services.news_search import aggregate_news, web_search
 from services.mock_plaid import mock_plaid_data
@@ -1233,18 +1232,6 @@ async def get_finance_accounts(current_user = Depends(get_current_user)):
     return {"accounts": accounts, "count": len(accounts)}
 
 
-@app.get("/api/finance/transactions")
-async def get_finance_transactions(days: int = 90, current_user = Depends(get_current_user)):
-    """Get user's financial transactions (requires authentication)"""
-    RequestLogger.log_request(structured_logger, "get_finance_transactions", user_id=str(user_id))
-    
-    if not finance_adapter:
-        transactions = mock_plaid_data.get_transactions(days)
-    else:
-        transactions = await finance_adapter.get_transactions(days)
-    return {"transactions": transactions, "count": len(transactions)}
-
-
 @app.get("/api/finance/subscriptions")
 async def get_subscriptions(current_user = Depends(get_current_user)):
     """Get user's subscriptions (requires authentication)"""
@@ -1807,12 +1794,6 @@ async def update_goal_progress(
     except Exception as e:
         logger.error(f"Error updating goal progress: {e}")
         raise HTTPException(status_code=500, detail="Failed to update progress")
-
-
-@app.get("/api/news")
-async def get_news(limit: int = 10):
-    headlines = news_aggregator.get_headlines(limit)
-    return {"news": headlines, "count": len(headlines)}
 
 
 @app.get("/api/news/search")
@@ -2688,14 +2669,6 @@ async def finance_add_account(req: FinanceAccountRequest):
         balance=req.balance
     )
     return created
-
-
-@app.get("/api/finance/accounts")
-async def finance_list_accounts(user_id: str = Query(...)):
-    if not finance_service:
-        raise HTTPException(status_code=503, detail="Finance service not initialized")
-    items = await finance_service.list_accounts(user_id=user_id)
-    return {"accounts": items, "count": len(items)}
 
 
 @app.post("/api/finance/transactions/import")
