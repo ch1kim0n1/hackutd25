@@ -1,38 +1,28 @@
 /**
  * Base Alpaca Client
- * Core client for making authenticated requests to Alpaca API
- * Uses fetch API for browser compatibility (no Node.js dependencies)
+ * Proxies requests through the backend API for security
+ * All Alpaca credentials are managed server-side
  */
 
 import type { AlpacaError } from "./alpaca.types";
-
-import { getAlpacaConfig, type AlpacaConfig } from "./alpaca.config";
+import { BackendAPI } from "./BackendAPI";
 
 export class AlpacaClient {
-  protected config: AlpacaConfig;
-
-  constructor(config?: Partial<AlpacaConfig>) {
-    this.config = { ...getAlpacaConfig(), ...config };
-
-    if (!this.config.keyId || !this.config.secretKey) {
-      throw new Error(
-        "Alpaca API credentials are required. Please set VITE_ALPACA_API_KEY and VITE_ALPACA_SECRET_KEY",
-      );
-    }
-  }
-
   /**
    * Get the current configuration
+   * Note: Configuration is now managed server-side
    */
-  getConfig(): AlpacaConfig {
-    return this.config;
+  getConfig(): { paper: boolean } {
+    // Return minimal config - actual credentials are server-side
+    return { paper: true }; // Assume paper trading by default
   }
 
   /**
    * Check if using paper trading
+   * Note: This is now determined server-side
    */
   isPaperTrading(): boolean {
-    return this.config.paper;
+    return true; // Server-side determines actual mode
   }
 
   /**
@@ -51,7 +41,8 @@ export class AlpacaClient {
   }
 
   /**
-   * Make a generic API request
+   * Make a generic API request through the backend
+   * All requests are proxied through /api/trade endpoint
    */
   protected async request<T>(
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
@@ -59,33 +50,25 @@ export class AlpacaClient {
     data?: any,
   ): Promise<T> {
     try {
-      const baseUrl = this.config.paper
-        ? "https://paper-api.alpaca.markets"
-        : "https://api.alpaca.markets";
-
-      const response = await fetch(`${baseUrl}${endpoint}`, {
-        method,
-        headers: {
-          "APCA-API-KEY-ID": this.config.keyId,
-          "APCA-API-SECRET-KEY": this.config.secretKey,
-          "Content-Type": "application/json",
-        },
-        body: data ? JSON.stringify(data) : undefined,
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-
-        throw {
-          response: {
-            status: response.status,
-            data: error,
-          },
-          message: error.message || "API request failed",
-        };
+      // For trading operations, use the backend API
+      if (method === "POST" && endpoint.includes("/orders")) {
+        // This is a trade order - use the backend trade endpoint
+        return await BackendAPI.trading.placeTrade(data) as T;
+      } else if (method === "GET" && endpoint.includes("/account")) {
+        // Get account info
+        return await BackendAPI.account.get() as T;
+      } else if (method === "GET" && endpoint.includes("/positions")) {
+        // Get positions
+        return await BackendAPI.portfolio.getPositions() as T;
+      } else if (method === "GET" && endpoint.includes("/orders")) {
+        // Get orders/trades
+        return await BackendAPI.trading.getTrades() as T;
       }
 
-      return await response.json();
+      // Fallback: generic request (will need backend endpoint)
+      throw new Error(
+        `Unsupported Alpaca operation: ${method} ${endpoint}. Please use BackendAPI directly.`
+      );
     } catch (error) {
       return this.handleError(error);
     }

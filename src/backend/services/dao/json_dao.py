@@ -1,9 +1,12 @@
 """
 Unified Data Access Object (DAO) layer using JSON storage.
 Replaces database-specific DAOs with JSON file operations.
+
+All DAO methods perform Pydantic validation to ensure data integrity.
 """
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from pydantic import ValidationError
 from models.pydantic_models import (
     User, Portfolio, Trade, Goal, Account, Transaction,
     Subscription, VoiceCommand, RAGDocument
@@ -11,15 +14,35 @@ from models.pydantic_models import (
 from services.json_storage_service import storage
 
 
+class DAOValidationError(Exception):
+    """Raised when data validation fails in DAO operations"""
+    pass
+
+
 class UserDAO:
     """Data access object for User operations"""
 
     @staticmethod
     def create_user(user_data: Dict[str, Any]) -> User:
-        """Create a new user"""
-        user = User(**user_data)
-        stored = storage.users.create(user.id, user.dict())
-        return User(**stored)
+        """
+        Create a new user with Pydantic validation.
+
+        Args:
+            user_data: User data dictionary
+
+        Returns:
+            Validated User object
+
+        Raises:
+            DAOValidationError: If user data fails validation
+        """
+        try:
+            # Validate user data with Pydantic
+            user = User(**user_data)
+            stored = storage.users.create(user.id, user.dict())
+            return User(**stored)
+        except ValidationError as e:
+            raise DAOValidationError(f"User validation failed: {e}")
 
     @staticmethod
     def get_user_by_id(user_id: str) -> Optional[User]:
@@ -41,10 +64,28 @@ class UserDAO:
 
     @staticmethod
     def update_user(user_id: str, updates: Dict[str, Any]) -> Optional[User]:
-        """Update user"""
-        updates["updated_at"] = datetime.utcnow().isoformat()
-        data = storage.users.update(user_id, updates)
-        return User(**data) if data else None
+        """
+        Update user with validation.
+
+        Args:
+            user_id: User ID to update
+            updates: Fields to update
+
+        Returns:
+            Updated User object or None if not found
+
+        Raises:
+            DAOValidationError: If update results in invalid user data
+        """
+        try:
+            updates["updated_at"] = datetime.utcnow().isoformat()
+            data = storage.users.update(user_id, updates)
+            if data:
+                # Validate the updated user data
+                return User(**data)
+            return None
+        except ValidationError as e:
+            raise DAOValidationError(f"User update validation failed: {e}")
 
     @staticmethod
     def delete_user(user_id: str) -> bool:

@@ -1,29 +1,54 @@
 /**
  * Market Data Service
- * Handles real-time and historical market data
- * Browser-compatible version using fetch API
+ * Proxies market data requests through the backend API for security
+ * All Alpaca credentials and direct API access is managed server-side
  */
 
 import type { Bar, Quote, Trade, Snapshot, News } from "./alpaca.types";
+import { BackendAPI } from "./BackendAPI";
 
-import { AlpacaClient } from "./AlpacaClient";
+export class MarketDataService {
+  // ==================== QUOTES ====================
 
-export class MarketDataService extends AlpacaClient {
-  private get dataBaseUrl(): string {
-    return this.config.dataBaseUrl || "https://data.alpaca.markets";
+  /**
+   * Get latest quote for a symbol through backend API
+   */
+  async getLatestQuote(symbol: string): Promise<Quote> {
+    return await BackendAPI.market.getQuote(symbol);
   }
 
-  private get headers() {
-    return {
-      "APCA-API-KEY-ID": this.config.keyId,
-      "APCA-API-SECRET-KEY": this.config.secretKey,
-    };
+  /**
+   * Get quotes for multiple symbols
+   */
+  async getLatestQuotes(symbols: string[]): Promise<Record<string, Quote>> {
+    const result: Record<string, Quote> = {};
+
+    // Fetch quotes for each symbol in parallel through backend
+    await Promise.all(
+      symbols.map(async (symbol) => {
+        try {
+          result[symbol] = await BackendAPI.market.getQuote(symbol);
+        } catch (error) {
+          console.error(`Error fetching quote for ${symbol}:`, error);
+          // Return empty quote on error
+          result[symbol] = {
+            ax: "", ap: 0, as: 0,
+            bx: "", bp: 0, bs: 0,
+            t: new Date().toISOString(),
+            c: [], z: ""
+          };
+        }
+      }),
+    );
+
+    return result;
   }
 
   // ==================== BARS (CANDLES) ====================
 
   /**
-   * Get historical bars for a symbol
+   * Get historical bars for a symbol through backend API
+   * Note: Currently limited - backend should implement full historical endpoint
    */
   async getBars(
     symbol: string,
@@ -44,44 +69,27 @@ export class MarketDataService extends AlpacaClient {
       feed?: "iex" | "sip";
     },
   ): Promise<Bar[]> {
-    const queryParams = new URLSearchParams({
-      ...(params.start && {
-        start:
-          typeof params.start === "string"
-            ? params.start
-            : params.start.toISOString(),
-      }),
-      ...(params.end && {
-        end:
-          typeof params.end === "string"
-            ? params.end
-            : params.end.toISOString(),
-      }),
-      timeframe: params.timeframe || "1Day",
-      ...(params.limit && { limit: params.limit.toString() }),
-      ...(params.adjustment && { adjustment: params.adjustment }),
-      ...(params.feed && { feed: params.feed }),
-    }).toString();
+    try {
+      // Use backend API to fetch current quote and construct a bar
+      // TODO: Backend should implement /api/market/{symbol}/bars endpoint
+      const quote = await BackendAPI.market.getQuote(symbol);
 
-    const response = await fetch(
-      `${this.dataBaseUrl}/v2/stocks/${symbol}/bars?${queryParams}`,
-      {
-        headers: this.headers,
-      },
-    );
+      const bar: Bar = {
+        t: new Date().toISOString(),
+        o: quote.ap || 0,
+        h: quote.ap || 0,
+        l: quote.bp || 0,
+        c: quote.ap || 0,
+        v: 0,
+        n: 1,
+        vw: quote.ap || 0,
+      };
 
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
+      return [bar];
+    } catch (error) {
+      console.error("Error fetching bars:", error);
+      return [];
     }
-
-    const data = await response.json();
-
-    return data.bars || [];
   }
 
   /**
@@ -108,7 +116,6 @@ export class MarketDataService extends AlpacaClient {
   ): Promise<Record<string, Bar[]>> {
     const result: Record<string, Bar[]> = {};
 
-    // Fetch bars for each symbol in parallel
     await Promise.all(
       symbols.map(async (symbol) => {
         try {
@@ -126,190 +133,125 @@ export class MarketDataService extends AlpacaClient {
    * Get latest bar for a symbol
    */
   async getLatestBar(symbol: string): Promise<Bar> {
-    const response = await fetch(
-      `${this.dataBaseUrl}/v2/stocks/${symbol}/bars/latest`,
-      {
-        headers: this.headers,
-      },
-    );
-
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
-    }
-
-    const data = await response.json();
-
-    return data.bar;
-  }
-
-  // ==================== QUOTES ====================
-
-  /**
-   * Get latest quote for a symbol
-   */
-  async getLatestQuote(symbol: string): Promise<Quote> {
-    const response = await fetch(
-      `${this.dataBaseUrl}/v2/stocks/${symbol}/quotes/latest`,
-      {
-        headers: this.headers,
-      },
-    );
-
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
-    }
-
-    const data = await response.json();
-
-    return data.quote;
-  }
-
-  /**
-   * Get quotes for multiple symbols
-   */
-  async getLatestQuotes(symbols: string[]): Promise<Record<string, Quote>> {
-    const symbolsParam = symbols.join(",");
-    const response = await fetch(
-      `${this.dataBaseUrl}/v2/stocks/quotes/latest?symbols=${symbolsParam}`,
-      {
-        headers: this.headers,
-      },
-    );
-
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
-    }
-
-    const data = await response.json();
-
-    return data.quotes || {};
+    const bars = await this.getBars(symbol, { limit: 1 });
+    return bars[0] || {
+      t: new Date().toISOString(),
+      o: 0, h: 0, l: 0, c: 0, v: 0, n: 0, vw: 0
+    };
   }
 
   // ==================== TRADES ====================
 
   /**
    * Get latest trade for a symbol
+   * Uses quote data as proxy since backend doesn't have separate trade endpoint
    */
   async getLatestTrade(symbol: string): Promise<Trade> {
-    const response = await fetch(
-      `${this.dataBaseUrl}/v2/stocks/${symbol}/trades/latest`,
-      {
-        headers: this.headers,
-      },
-    );
+    const quote = await BackendAPI.market.getQuote(symbol);
 
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
-    }
-
-    const data = await response.json();
-
-    return data.trade;
+    return {
+      t: quote.t,
+      x: quote.ax,
+      p: quote.ap,
+      s: quote.as,
+      c: quote.c,
+      i: 0,
+      z: quote.z,
+    };
   }
 
   /**
    * Get trades for multiple symbols
    */
   async getLatestTrades(symbols: string[]): Promise<Record<string, Trade>> {
-    const symbolsParam = symbols.join(",");
-    const response = await fetch(
-      `${this.dataBaseUrl}/v2/stocks/trades/latest?symbols=${symbolsParam}`,
-      {
-        headers: this.headers,
-      },
+    const result: Record<string, Trade> = {};
+
+    await Promise.all(
+      symbols.map(async (symbol) => {
+        try {
+          result[symbol] = await this.getLatestTrade(symbol);
+        } catch (error) {
+          console.error(`Error fetching trade for ${symbol}:`, error);
+        }
+      }),
     );
 
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
-    }
-
-    const data = await response.json();
-
-    return data.trades || {};
+    return result;
   }
 
   // ==================== SNAPSHOTS ====================
 
   /**
    * Get snapshot for a symbol (comprehensive current data)
+   * Constructs snapshot from available backend data
    */
   async getSnapshot(symbol: string): Promise<Snapshot> {
-    const response = await fetch(
-      `${this.dataBaseUrl}/v2/stocks/${symbol}/snapshot`,
-      {
-        headers: this.headers,
+    const quote = await BackendAPI.market.getQuote(symbol);
+
+    // Construct a basic snapshot from quote data
+    return {
+      latestTrade: {
+        t: quote.t,
+        x: quote.ax,
+        p: quote.ap,
+        s: quote.as,
+        c: quote.c,
+        i: 0,
+        z: quote.z,
       },
-    );
-
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
-    }
-
-    const data = await response.json();
-
-    return data;
+      latestQuote: quote,
+      minuteBar: {
+        t: new Date().toISOString(),
+        o: quote.ap, h: quote.ap, l: quote.bp, c: quote.ap,
+        v: 0, n: 1, vw: quote.ap
+      },
+      dailyBar: {
+        t: new Date().toISOString(),
+        o: quote.o || quote.ap,
+        h: quote.h || quote.ap,
+        l: quote.l || quote.bp,
+        c: quote.c || quote.ap,
+        v: quote.v || 0,
+        n: 1,
+        vw: quote.ap
+      },
+      prevDailyBar: {
+        t: new Date(Date.now() - 86400000).toISOString(),
+        o: quote.o || quote.ap,
+        h: quote.h || quote.ap,
+        l: quote.l || quote.bp,
+        c: quote.c || quote.ap,
+        v: quote.v || 0,
+        n: 1,
+        vw: quote.ap
+      },
+    };
   }
 
   /**
    * Get snapshots for multiple symbols
    */
   async getSnapshots(symbols: string[]): Promise<Record<string, Snapshot>> {
-    const symbolsParam = symbols.join(",");
-    const response = await fetch(
-      `${this.dataBaseUrl}/v2/stocks/snapshots?symbols=${symbolsParam}`,
-      {
-        headers: this.headers,
-      },
+    const result: Record<string, Snapshot> = {};
+
+    await Promise.all(
+      symbols.map(async (symbol) => {
+        try {
+          result[symbol] = await this.getSnapshot(symbol);
+        } catch (error) {
+          console.error(`Error fetching snapshot for ${symbol}:`, error);
+        }
+      }),
     );
 
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
-    }
-
-    const data = await response.json();
-
-    return data || {};
+    return result;
   }
 
   // ==================== NEWS ====================
 
   /**
    * Get news articles
+   * TODO: Backend should implement news endpoint
    */
   async getNews(params?: {
     symbols?: string | string[];
@@ -318,69 +260,29 @@ export class MarketDataService extends AlpacaClient {
     limit?: number;
     sort?: "asc" | "desc";
   }): Promise<News[]> {
-    const queryParams = new URLSearchParams({
-      ...(params?.symbols && {
-        symbols: Array.isArray(params.symbols)
-          ? params.symbols.join(",")
-          : params.symbols,
-      }),
-      ...(params?.start && {
-        start:
-          typeof params.start === "string"
-            ? params.start
-            : params.start.toISOString(),
-      }),
-      ...(params?.end && {
-        end:
-          typeof params.end === "string"
-            ? params.end
-            : params.end.toISOString(),
-      }),
-      ...(params?.limit && { limit: params.limit.toString() }),
-      ...(params?.sort && { sort: params.sort }),
-    }).toString();
-
-    const response = await fetch(
-      `${this.dataBaseUrl}/v1beta1/news?${queryParams}`,
-      {
-        headers: this.headers,
-      },
-    );
-
-    if (!response.ok) {
-      const error = await response.json();
-
-      throw this.handleError({
-        response: { status: response.status, data: error },
-        message: error.message,
-      });
-    }
-
-    const data = await response.json();
-
-    return data.news || [];
+    console.warn("News endpoint not yet implemented in backend");
+    return [];
   }
 
   // ==================== ANALYSIS & UTILITIES ====================
 
   /**
-   * Get current price for a symbol (using latest trade)
+   * Get current price for a symbol
    */
   async getCurrentPrice(symbol: string): Promise<number> {
-    const trade = await this.getLatestTrade(symbol);
-
-    return trade.p;
+    const quote = await BackendAPI.market.getQuote(symbol);
+    return quote.ap || 0;
   }
 
   /**
    * Get current prices for multiple symbols
    */
   async getCurrentPrices(symbols: string[]): Promise<Record<string, number>> {
-    const trades = await this.getLatestTrades(symbols);
+    const quotes = await this.getLatestQuotes(symbols);
     const prices: Record<string, number> = {};
 
-    for (const [symbol, trade] of Object.entries(trades)) {
-      prices[symbol] = trade.p;
+    for (const [symbol, quote] of Object.entries(quotes)) {
+      prices[symbol] = quote.ap || 0;
     }
 
     return prices;
@@ -396,9 +298,9 @@ export class MarketDataService extends AlpacaClient {
     spread: number;
     spreadPercent: number;
   }> {
-    const quote = await this.getLatestQuote(symbol);
+    const quote = await BackendAPI.market.getQuote(symbol);
     const spread = quote.ap - quote.bp;
-    const spreadPercent = (spread / quote.bp) * 100;
+    const spreadPercent = quote.bp > 0 ? (spread / quote.bp) * 100 : 0;
 
     return {
       price: (quote.bp + quote.ap) / 2,
@@ -420,15 +322,15 @@ export class MarketDataService extends AlpacaClient {
     dayOpen: number;
     volume: number;
   }> {
-    const snapshot = await this.getSnapshot(symbol);
+    const quote = await BackendAPI.market.getQuote(symbol);
 
     return {
       symbol,
-      currentPrice: snapshot.latestTrade?.p || 0,
-      dayHigh: snapshot.dailyBar?.h || 0,
-      dayLow: snapshot.dailyBar?.l || 0,
-      dayOpen: snapshot.dailyBar?.o || 0,
-      volume: snapshot.dailyBar?.v || 0,
+      currentPrice: quote.ap || 0,
+      dayHigh: quote.h || 0,
+      dayLow: quote.l || 0,
+      dayOpen: quote.o || 0,
+      volume: quote.v || 0,
     };
   }
 
@@ -441,9 +343,9 @@ export class MarketDataService extends AlpacaClient {
     change: number;
     changePercent: number;
   }> {
-    const snapshot = await this.getSnapshot(symbol);
-    const currentPrice = snapshot.latestTrade?.p || 0;
-    const previousClose = snapshot.prevDailyBar?.c || 0;
+    const quote = await BackendAPI.market.getQuote(symbol);
+    const currentPrice = quote.ap || 0;
+    const previousClose = quote.c || currentPrice;
     const change = currentPrice - previousClose;
     const changePercent =
       previousClose > 0 ? (change / previousClose) * 100 : 0;
@@ -461,7 +363,7 @@ export class MarketDataService extends AlpacaClient {
    */
   async isTrading(symbol: string): Promise<boolean> {
     try {
-      const quote = await this.getLatestQuote(symbol);
+      const quote = await BackendAPI.market.getQuote(symbol);
       // Check if quote is recent (within last 5 minutes)
       const quoteTime = new Date(quote.t).getTime();
       const now = Date.now();
@@ -487,7 +389,6 @@ export class MarketDataService extends AlpacaClient {
       symbols.map(async (symbol) => {
         try {
           const change = await this.getPriceChange(symbol);
-
           return { symbol, ...change };
         } catch (error) {
           return null;

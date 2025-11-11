@@ -13,6 +13,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from datetime import datetime
@@ -129,12 +132,20 @@ class StatusResponse(BaseModel):
 # Create FastAPI app with enhanced security
 app = FastAPI(
     title="APEX API",
-    description="Multi-Agent Financial Investment System API",
-    version="2.0.0"
+    description="Multi-Agent Financial Investment System API - v1 compatible endpoints",
+    version="2.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json"
 )
 
 # Setup global exception handlers
 setup_exception_handlers(app)
+
+# Configure rate limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # Environment variable validation
@@ -239,6 +250,46 @@ app.add_middleware(
     expose_headers=["X-Correlation-ID"],
     max_age=600,  # Cache CORS preflight for 10 minutes
 )
+
+
+# Request size limit middleware
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    """
+    Limit request body size to prevent DoS attacks.
+    Max size: 10MB for most requests, 50MB for file uploads.
+    """
+    max_size = 10 * 1024 * 1024  # 10MB default
+
+    # Allow larger uploads for specific endpoints
+    if request.url.path.startswith("/api/upload") or request.url.path.startswith("/api/voice"):
+        max_size = 50 * 1024 * 1024  # 50MB for file uploads
+
+    # Check Content-Length header if present
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > max_size:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "detail": f"Request body too large. Maximum size is {max_size // (1024*1024)}MB"
+            }
+        )
+
+    return await call_next(request)
+
+
+# API versioning middleware
+@app.middleware("http")
+async def add_api_version_header(request: Request, call_next):
+    """
+    Add API version header to all responses.
+    Current API is v1 compatible, documented at /api/docs
+    """
+    response = await call_next(request)
+    response.headers["X-API-Version"] = "1.0"
+    response.headers["X-API-Compat"] = "v1"
+    return response
+
 
 # Global orchestrator instance
 orchestrator: Optional[Orchestrator] = None
@@ -414,13 +465,74 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Basic health check endpoint"""
     return {
         "name": "APEX API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "status": "running",
         "timestamp": datetime.now().isoformat()
     }
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Comprehensive health check endpoint.
+    Returns detailed system status including storage, services, and configuration.
+    """
+    import psutil
+
+    # Check data storage
+    data_dir = Path("data")
+    storage_healthy = data_dir.exists() and data_dir.is_dir()
+
+    # Check environment variables
+    env_vars_healthy = all([
+        os.getenv("JWT_SECRET_KEY"),
+        os.getenv("ALPACA_API_KEY"),
+        os.getenv("ALPACA_SECRET_KEY"),
+    ])
+
+    # System metrics
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage('.')
+
+    # Determine overall health
+    is_healthy = storage_healthy and env_vars_healthy
+
+    health_data = {
+        "status": "healthy" if is_healthy else "unhealthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "2.0.0",
+        "uptime_seconds": (datetime.now() - datetime.fromtimestamp(psutil.boot_time())).total_seconds(),
+        "checks": {
+            "storage": {
+                "status": "ok" if storage_healthy else "error",
+                "data_directory_exists": storage_healthy,
+                "path": str(data_dir)
+            },
+            "environment": {
+                "status": "ok" if env_vars_healthy else "error",
+                "required_vars_set": env_vars_healthy
+            },
+            "system": {
+                "status": "ok",
+                "memory_percent": memory.percent,
+                "memory_available_mb": memory.available / (1024 * 1024),
+                "disk_percent": disk.percent,
+                "disk_free_gb": disk.free / (1024 * 1024 * 1024),
+                "cpu_count": psutil.cpu_count()
+            }
+        },
+        "services": {
+            "orchestrator": orchestrator is not None,
+            "finance_service": finance_service is not None,
+            "voice_service": voice_service is not None,
+        }
+    }
+
+    status_code = 200 if is_healthy else 503
+    return JSONResponse(content=health_data, status_code=status_code)
 
 
 @app.get("/api/status", response_model=StatusResponse)
@@ -445,7 +557,8 @@ async def get_status():
 # ============================================================================
 
 @app.post("/auth/login")
-async def login(request: LoginRequest):
+@limiter.limit("5/minute")  # Max 5 login attempts per minute
+async def login(request: Request, login_request: LoginRequest):
     """
     Authenticate user and return access + refresh tokens
     
@@ -464,7 +577,7 @@ async def login(request: LoginRequest):
         }
     """
     from services.auth import login_user
-    return await login_user(request.username, request.password)
+    return await login_user(login_request.username, login_request.password)
 
 
 @app.post("/auth/refresh")
@@ -556,7 +669,8 @@ class UserRegistrationRequest(BaseModel):
 
 
 @app.post("/auth/register")
-async def register_user(registration: UserRegistrationRequest):
+@limiter.limit("3/hour")  # Max 3 registrations per hour per IP
+async def register_user(request: Request, registration: UserRegistrationRequest):
     """
     Register a new user account
 
@@ -949,16 +1063,29 @@ async def get_account():
 
 
 @app.get("/api/positions")
-async def get_positions():
+async def get_positions(
+    limit: int = Query(100, ge=1, le=500, description="Number of positions to return"),
+    offset: int = Query(0, ge=0, description="Number of positions to skip")
+):
+    """
+    Get positions with pagination.
+
+    Args:
+        limit: Maximum number of positions to return (1-500, default 100)
+        offset: Number of positions to skip (default 0)
+
+    Returns:
+        Paginated list of positions
+    """
     if not alpaca_broker:
         raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
-    
+
     try:
         positions = await alpaca_broker.get_positions()
         if isinstance(positions, dict) and 'error' in positions:
-            return []
-        
-        return [
+            return {"positions": [], "total": 0, "limit": limit, "offset": offset}
+
+        formatted_positions = [
             {
                 "symbol": pos['symbol'],
                 "qty": pos['qty'],
@@ -971,24 +1098,60 @@ async def get_positions():
             }
             for pos in positions
         ]
+
+        # Apply pagination
+        total = len(formatted_positions)
+        paginated_positions = formatted_positions[offset:offset + limit]
+
+        return {
+            "positions": paginated_positions,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + limit) < total
+        }
     except Exception as e:
         logger.error(f"Error fetching positions: {e}")
-        return []
+        return {"positions": [], "total": 0, "limit": limit, "offset": offset}
 
 
 @app.get("/api/orders")
-async def get_orders():
+async def get_orders(
+    limit: int = Query(100, ge=1, le=500, description="Number of orders to return"),
+    offset: int = Query(0, ge=0, description="Number of orders to skip")
+):
+    """
+    Get orders with pagination.
+
+    Args:
+        limit: Maximum number of orders to return (1-500, default 100)
+        offset: Number of orders to skip (default 0)
+
+    Returns:
+        Paginated list of orders
+    """
     if not alpaca_broker:
         raise HTTPException(status_code=503, detail="Alpaca broker not initialized")
-    
+
     try:
         orders = await alpaca_broker.get_orders()
         if isinstance(orders, dict) and 'error' in orders:
-            return []
-        return orders
+            return {"orders": [], "total": 0, "limit": limit, "offset": offset}
+
+        # Apply pagination
+        total = len(orders) if isinstance(orders, list) else 0
+        paginated_orders = orders[offset:offset + limit] if isinstance(orders, list) else []
+
+        return {
+            "orders": paginated_orders,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + limit) < total
+        }
     except Exception as e:
         logger.error(f"Error fetching orders: {e}")
-        return []
+        return {"orders": [], "total": 0, "limit": limit, "offset": offset}
 
 
 class TradeRequest(BaseModel):
@@ -1001,7 +1164,8 @@ class TradeRequest(BaseModel):
 
 
 @app.post("/api/trade")
-async def place_trade(trade: TradeRequest, current_user = Depends(get_current_user)):
+@limiter.limit("30/minute")  # Max 30 trades per minute
+async def place_trade(request: Request, trade: TradeRequest, current_user = Depends(get_current_user)):
     """
     Place a buy or sell order.
 
