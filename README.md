@@ -1,6 +1,6 @@
 # APEX: Multi-Agent Financial Investment System
 
-> A transparent AI-powered financial platform where users actively participate in investment decisions alongside specialized AI agents.
+> A transparent AI-powered financial platform where users actively participate in investment decisions alongside specialized AI agents
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110-green.svg)](https://fastapi.tiangolo.com/)
